@@ -23,8 +23,8 @@ static DEFAULT_HASHES: LazyLock<[[u8; 32]; TREE_DEPTH + 1]> = LazyLock::new(|| {
     hashes[0] = Sha256::digest(b"").into();
     for i in 1..=TREE_DEPTH {
         let mut hasher = Sha256::new();
-        hasher.update(&hashes[i - 1]);
-        hasher.update(&hashes[i - 1]);
+        hasher.update(hashes[i - 1]);
+        hasher.update(hashes[i - 1]);
         hashes[i] = hasher.finalize().into();
     }
     hashes
@@ -41,7 +41,7 @@ pub fn default_hash(depth: usize) -> &'static [u8; 32] {
 pub type NodeHash = [u8; 32];
 
 /// A Sparse Merkle Tree for fact IDs.
-/// 
+///
 /// Keys are 256-bit FactIds; values are marked as present (leaf = H(key)) or absent.
 #[derive(Clone, Debug)]
 pub struct SparseMerkleTree {
@@ -73,18 +73,21 @@ impl SparseMerkleTree {
 
     /// Check if a fact ID is in the tree.
     pub fn contains(&self, fact_id: &FactId) -> bool {
-        self.leaves.get(fact_id.as_bytes()).copied().unwrap_or(false)
+        self.leaves
+            .get(fact_id.as_bytes())
+            .copied()
+            .unwrap_or(false)
     }
 
     /// Insert a fact ID into the tree.
     /// Returns true if the fact was newly inserted, false if already present.
     pub fn insert(&mut self, fact_id: &FactId) -> bool {
         let key = *fact_id.as_bytes();
-        
+
         if self.leaves.get(&key).copied().unwrap_or(false) {
             return false;
         }
-        
+
         self.leaves.insert(key, true);
         self.recompute_path(fact_id);
         true
@@ -94,25 +97,25 @@ impl SparseMerkleTree {
     fn recompute_path(&mut self, fact_id: &FactId) {
         let leaf_hash = Self::leaf_hash(fact_id);
         let key = *fact_id.as_bytes();
-        
+
         let mut current_hash = leaf_hash;
-        
+
         for depth in 0..TREE_DEPTH {
             let bit = fact_id.bit(TREE_DEPTH - 1 - depth);
             let sibling_path = Self::sibling_path(&key, depth);
             let sibling_hash = self.get_node_hash(depth, &sibling_path);
-            
+
             let parent_hash = if bit {
                 Self::hash_pair(&sibling_hash, &current_hash)
             } else {
                 Self::hash_pair(&current_hash, &sibling_hash)
             };
-            
+
             let node_path = Self::path_for_depth(&key, depth + 1);
             self.nodes.insert((depth + 1, node_path), parent_hash);
             current_hash = parent_hash;
         }
-        
+
         self.root = current_hash;
     }
 
@@ -124,7 +127,7 @@ impl SparseMerkleTree {
             }
             return *default_hash(0);
         }
-        
+
         self.nodes
             .get(&(depth, *path))
             .copied()
@@ -172,7 +175,7 @@ impl SparseMerkleTree {
         let mut result = [0u8; 32];
         let full_bytes = num_bits / 8;
         let remaining_bits = num_bits % 8;
-        
+
         result[..full_bytes].copy_from_slice(&key[..full_bytes]);
         if remaining_bits > 0 && full_bytes < 32 {
             let mask = 0xFF << (8 - remaining_bits);
@@ -214,7 +217,7 @@ mod tests {
     fn test_insert_and_contains() {
         let mut tree = SparseMerkleTree::new();
         let fact = FactId::from_json_value(&json!({"key": "value"}));
-        
+
         assert!(!tree.contains(&fact));
         assert!(tree.insert(&fact));
         assert!(tree.contains(&fact));
@@ -225,10 +228,10 @@ mod tests {
     fn test_root_changes_on_insert() {
         let mut tree = SparseMerkleTree::new();
         let initial_root = *tree.root();
-        
+
         let fact = FactId::from_json_value(&json!({"test": 1}));
         tree.insert(&fact);
-        
+
         assert_ne!(*tree.root(), initial_root);
     }
 

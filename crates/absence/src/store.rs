@@ -32,7 +32,7 @@ pub enum StoreError {
 }
 
 /// A commitment to the current state of the store.
-/// 
+///
 /// This is the root hash that proofs are verified against.
 /// Publish this commitment; verifiers use it to check proofs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -49,25 +49,25 @@ impl Commitment {
 }
 
 /// High-level API for managing a set of committed facts with absence proofs.
-/// 
+///
 /// # Example
-/// 
+///
 /// ```
 /// use absence::AbsenceStore;
 /// use serde_json::json;
-/// 
+///
 /// let mut store = AbsenceStore::new();
-/// 
+///
 /// // Record some facts
 /// store.record_json(&json!({"user": "alice", "secret": "password123"})).unwrap();
-/// 
+///
 /// // Get commitment (publish this)
 /// let commitment = store.commitment();
-/// 
+///
 /// // Prove a different secret was NEVER recorded
 /// let other_secret = json!({"user": "alice", "secret": "other_password"});
 /// let proof = store.prove_absent_json(&other_secret).unwrap();
-/// 
+///
 /// // Verifier can check the proof against the published commitment
 /// assert!(AbsenceStore::verify_absent(&proof, &commitment.root).is_ok());
 /// ```
@@ -199,7 +199,7 @@ mod tests {
     fn test_record_fact() {
         let mut store = AbsenceStore::new();
         let fact_id = store.record_json(&json!({"test": "value"})).unwrap();
-        
+
         assert!(!store.is_empty());
         assert_eq!(store.len(), 1);
         assert!(store.contains(&fact_id));
@@ -209,7 +209,7 @@ mod tests {
     fn test_duplicate_record_fails() {
         let mut store = AbsenceStore::new();
         let value = json!({"duplicate": "test"});
-        
+
         assert!(store.record_json(&value).is_ok());
         assert!(matches!(
             store.record_json(&value),
@@ -222,7 +222,7 @@ mod tests {
         let mut store = AbsenceStore::new();
         let c1 = store.commitment();
         assert_eq!(c1.fact_count, 0);
-        
+
         store.record_json(&json!({"fact": 1})).unwrap();
         let c2 = store.commitment();
         assert_eq!(c2.fact_count, 1);
@@ -233,7 +233,7 @@ mod tests {
     fn test_prove_absent_empty_store() {
         let store = AbsenceStore::new();
         let fact = FactId::from_json_value(&json!({"any": "fact"}));
-        
+
         let proof = store.prove_absent(&fact).unwrap();
         assert!(AbsenceStore::verify_absent(&proof, store.root()).is_ok());
     }
@@ -243,10 +243,10 @@ mod tests {
         let mut store = AbsenceStore::new();
         store.record_json(&json!({"recorded": 1})).unwrap();
         store.record_json(&json!({"recorded": 2})).unwrap();
-        
+
         let absent = FactId::from_json_value(&json!({"not_recorded": true}));
         let proof = store.prove_absent(&absent).unwrap();
-        
+
         assert!(AbsenceStore::verify_absent(&proof, store.root()).is_ok());
     }
 
@@ -254,7 +254,7 @@ mod tests {
     fn test_prove_absent_fails_for_present() {
         let mut store = AbsenceStore::new();
         let fact_id = store.record_json(&json!({"present": true})).unwrap();
-        
+
         assert!(matches!(
             store.prove_absent(&fact_id),
             Err(StoreError::FactPresent)
@@ -265,7 +265,7 @@ mod tests {
     fn test_prove_present() {
         let mut store = AbsenceStore::new();
         let fact_id = store.record_json(&json!({"present": "fact"})).unwrap();
-        
+
         let proof = store.prove_present(&fact_id).unwrap();
         assert!(AbsenceStore::verify_present(&proof, store.root()).is_ok());
     }
@@ -274,7 +274,7 @@ mod tests {
     fn test_prove_present_fails_for_absent() {
         let store = AbsenceStore::new();
         let fact = FactId::from_json_value(&json!({"absent": true}));
-        
+
         assert!(matches!(
             store.prove_present(&fact),
             Err(StoreError::NotRecorded)
@@ -286,7 +286,7 @@ mod tests {
         let store = AbsenceStore::new();
         let fact = FactId::from_json_value(&json!({"test": 123}));
         let proof = store.prove_absent(&fact).unwrap();
-        
+
         let wrong_root = [0xFFu8; 32];
         assert!(AbsenceStore::verify_absent(&proof, &wrong_root).is_err());
     }
@@ -295,13 +295,13 @@ mod tests {
     fn test_proof_pinned_to_commitment() {
         let mut store = AbsenceStore::new();
         let fact = FactId::from_json_value(&json!({"will_add": true}));
-        
+
         let proof_before = store.prove_absent(&fact).unwrap();
         let root_before = *store.root();
-        
+
         store.record(&fact).unwrap();
         let root_after = *store.root();
-        
+
         assert!(AbsenceStore::verify_absent(&proof_before, &root_before).is_ok());
         assert!(AbsenceStore::verify_absent(&proof_before, &root_after).is_err());
     }
@@ -313,13 +313,13 @@ mod tests {
             name: String,
             value: i32,
         }
-        
+
         let mut store = AbsenceStore::new();
         let data = TestStruct {
             name: "test".to_string(),
             value: 42,
         };
-        
+
         let fact_id = store.record_value(&data).unwrap();
         assert!(store.contains(&fact_id));
     }
@@ -327,17 +327,21 @@ mod tests {
     #[test]
     fn test_absence_store_workflow() {
         let mut store = AbsenceStore::new();
-        
-        store.record_json(&json!({"user": "alice", "action": "login"})).unwrap();
-        store.record_json(&json!({"user": "bob", "action": "login"})).unwrap();
-        
+
+        store
+            .record_json(&json!({"user": "alice", "action": "login"}))
+            .unwrap();
+        store
+            .record_json(&json!({"user": "bob", "action": "login"}))
+            .unwrap();
+
         let commitment = store.commitment();
-        
+
         let never_happened = json!({"user": "alice", "action": "delete_all"});
         let proof = store.prove_absent_json(&never_happened).unwrap();
-        
+
         assert!(AbsenceStore::verify_absent(&proof, &commitment.root).is_ok());
-        
+
         let happened = json!({"user": "alice", "action": "login"});
         assert!(store.prove_absent_json(&happened).is_err());
     }
@@ -346,7 +350,7 @@ mod tests {
     fn test_commitment_hex() {
         let store = AbsenceStore::new();
         let commitment = store.commitment();
-        
+
         let hex = commitment.root_hex();
         assert_eq!(hex.len(), 64);
         assert!(hex.chars().all(|c| c.is_ascii_hexdigit()));

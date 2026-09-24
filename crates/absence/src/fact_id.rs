@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 use std::fmt;
 
 /// A 32-byte content-addressed fact identifier.
-/// 
+///
 /// Computed as SHA-256 of the RFC 8785 (JCS) canonical JSON representation.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FactId([u8; 32]);
@@ -95,7 +95,7 @@ impl From<[u8; 32]> for FactId {
 }
 
 /// Canonicalize a JSON value according to RFC 8785 (JCS).
-/// 
+///
 /// Rules:
 /// - No whitespace between tokens
 /// - Object keys sorted lexicographically (UTF-16 code units)
@@ -179,7 +179,7 @@ fn normalize_exp_notation(s: &str) -> String {
         let mantissa = &s[..e_pos];
         let exp_part = &s[e_pos + 1..];
         let exp: i32 = exp_part.parse().unwrap_or(0);
-        
+
         if exp.abs() < 21 {
             if let Ok(f) = s.parse::<f64>() {
                 let formatted = format!("{}", f);
@@ -188,14 +188,18 @@ fn normalize_exp_notation(s: &str) -> String {
                 }
             }
         }
-        
+
         let clean_mantissa = mantissa.trim_end_matches('0').trim_end_matches('.');
         let clean_mantissa = if clean_mantissa.is_empty() || clean_mantissa == "-" {
-            if mantissa.starts_with('-') { "-0" } else { "0" }
+            if mantissa.starts_with('-') {
+                "-0"
+            } else {
+                "0"
+            }
         } else {
             clean_mantissa
         };
-        
+
         if exp == 0 {
             clean_mantissa.to_string()
         } else {
@@ -306,15 +310,15 @@ mod tests {
         let mut bytes = [0u8; 32];
         bytes[0] = 0b10110100;
         let id = FactId::from_bytes(bytes);
-        
-        assert!(id.bit(0));   // 1
-        assert!(!id.bit(1));  // 0
-        assert!(id.bit(2));   // 1
-        assert!(id.bit(3));   // 1
-        assert!(!id.bit(4));  // 0
-        assert!(id.bit(5));   // 1
-        assert!(!id.bit(6));  // 0
-        assert!(!id.bit(7));  // 0
+
+        assert!(id.bit(0)); // 1
+        assert!(!id.bit(1)); // 0
+        assert!(id.bit(2)); // 1
+        assert!(id.bit(3)); // 1
+        assert!(!id.bit(4)); // 0
+        assert!(id.bit(5)); // 1
+        assert!(!id.bit(6)); // 0
+        assert!(!id.bit(7)); // 0
     }
 
     #[test]

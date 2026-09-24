@@ -72,7 +72,7 @@ impl MembershipProof {
 
         let fact_id = FactId::from_bytes(self.fact_id);
         let leaf_hash = Self::compute_leaf_hash(&fact_id);
-        let computed_root = Self::compute_root(&fact_id, leaf_hash, &self.siblings);
+        let computed_root = compute_root_from_path(&fact_id, leaf_hash, &self.siblings);
 
         if &computed_root != expected_root {
             return Err(ProofError::RootMismatch);
@@ -86,26 +86,85 @@ impl MembershipProof {
         Sha256::digest(fact_id.as_bytes()).into()
     }
 
-    /// Compute root from leaf hash and siblings.
-    fn compute_root(fact_id: &FactId, leaf_hash: NodeHash, siblings: &[NodeHash]) -> NodeHash {
-        let mut current = leaf_hash;
+    /// Get the fact ID this proof is for.
+    pub fn fact_id(&self) -> FactId {
+        FactId::from_bytes(self.fact_id)
+    }
+}
 
-        for (depth, sibling) in siblings.iter().enumerate() {
-            let bit = fact_id.bit(TREE_DEPTH - 1 - depth);
-            current = if bit {
-                hash_pair(sibling, &current)
-            } else {
-                hash_pair(&current, sibling)
-            };
+/// A non-membership (absence) proof for a fact ID.
+/// 
+/// Proves that a fact ID is NOT in the tree by providing sibling hashes
+/// that, when combined with an EMPTY leaf hash, produce the root.
+/// 
+/// This is the PRIMARY feature of the Absence library.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct NonMembershipProof {
+    pub fact_id: [u8; 32],
+    pub siblings: Vec<NodeHash>,
+}
+
+impl NonMembershipProof {
+    /// Generate a non-membership (absence) proof for a fact ID.
+    /// Returns None if the fact IS in the tree (cannot prove absence).
+    pub fn generate(tree: &SparseMerkleTree, fact_id: &FactId) -> Option<Self> {
+        if tree.contains(fact_id) {
+            return None;
         }
 
-        current
+        let siblings: Vec<NodeHash> = (0..TREE_DEPTH)
+            .map(|depth| tree.get_sibling_hash(fact_id, depth))
+            .collect();
+
+        Some(Self {
+            fact_id: *fact_id.as_bytes(),
+            siblings,
+        })
+    }
+
+    /// Verify this non-membership proof against an expected root hash.
+    /// 
+    /// Verifies that the path from an EMPTY leaf to the root produces
+    /// the expected root hash, proving the fact is absent.
+    pub fn verify(&self, expected_root: &NodeHash) -> Result<(), ProofError> {
+        if self.siblings.len() != TREE_DEPTH {
+            return Err(ProofError::WrongSiblingCount {
+                expected: TREE_DEPTH,
+                got: self.siblings.len(),
+            });
+        }
+
+        let fact_id = FactId::from_bytes(self.fact_id);
+        let empty_leaf_hash = *default_hash(0);
+        let computed_root = compute_root_from_path(&fact_id, empty_leaf_hash, &self.siblings);
+
+        if &computed_root != expected_root {
+            return Err(ProofError::RootMismatch);
+        }
+
+        Ok(())
     }
 
     /// Get the fact ID this proof is for.
     pub fn fact_id(&self) -> FactId {
         FactId::from_bytes(self.fact_id)
     }
+}
+
+/// Compute root from a leaf hash and sibling path.
+fn compute_root_from_path(fact_id: &FactId, leaf_hash: NodeHash, siblings: &[NodeHash]) -> NodeHash {
+    let mut current = leaf_hash;
+
+    for (depth, sibling) in siblings.iter().enumerate() {
+        let bit = fact_id.bit(TREE_DEPTH - 1 - depth);
+        current = if bit {
+            hash_pair(sibling, &current)
+        } else {
+            hash_pair(&current, sibling)
+        };
+    }
+
+    current
 }
 
 /// Helper to hash two nodes.
@@ -193,5 +252,145 @@ mod tests {
         let restored: MembershipProof = serde_json::from_str(&json).unwrap();
         
         assert!(restored.verify(tree.root()).is_ok());
+    }
+
+    // ============= NON-MEMBERSHIP (ABSENCE) PROOF TESTS =============
+
+    #[test]
+    fn test_absence_proof_generation_empty_tree() {
+        let tree = SparseMerkleTree::new();
+        let fact = FactId::from_json_value(&json!({"absent": true}));
+        
+        let proof = NonMembershipProof::generate(&tree, &fact);
+        assert!(proof.is_some());
+        
+        let proof = proof.unwrap();
+        assert_eq!(proof.siblings.len(), TREE_DEPTH);
+    }
+
+    #[test]
+    fn test_absence_proof_generation_non_empty_tree() {
+        let mut tree = SparseMerkleTree::new();
+        tree.insert(&FactId::from_json_value(&json!({"present": 1})));
+        tree.insert(&FactId::from_json_value(&json!({"present": 2})));
+        
+        let absent = FactId::from_json_value(&json!({"absent": true}));
+        let proof = NonMembershipProof::generate(&tree, &absent);
+        assert!(proof.is_some());
+    }
+
+    #[test]
+    fn test_absence_proof_fails_for_present_fact() {
+        let mut tree = SparseMerkleTree::new();
+        let fact = FactId::from_json_value(&json!({"present": true}));
+        tree.insert(&fact);
+        
+        let proof = NonMembershipProof::generate(&tree, &fact);
+        assert!(proof.is_none());
+    }
+
+    #[test]
+    fn test_absence_proof_verification_empty_tree() {
+        let tree = SparseMerkleTree::new();
+        let fact = FactId::from_json_value(&json!({"missing": "key"}));
+        
+        let proof = NonMembershipProof::generate(&tree, &fact).unwrap();
+        let root = *tree.root();
+        
+        assert!(proof.verify(&root).is_ok());
+    }
+
+    #[test]
+    fn test_absence_proof_verification_with_other_facts() {
+        let mut tree = SparseMerkleTree::new();
+        for i in 0..10 {
+            tree.insert(&FactId::from_json_value(&json!({"existing": i})));
+        }
+        
+        let absent = FactId::from_json_value(&json!({"definitely_not_here": true}));
+        let proof = NonMembershipProof::generate(&tree, &absent).unwrap();
+        let root = *tree.root();
+        
+        assert!(proof.verify(&root).is_ok());
+    }
+
+    #[test]
+    fn test_absence_proof_fails_wrong_root() {
+        let tree = SparseMerkleTree::new();
+        let fact = FactId::from_json_value(&json!({"test": "absence"}));
+        
+        let proof = NonMembershipProof::generate(&tree, &fact).unwrap();
+        let wrong_root = [0xFFu8; 32];
+        
+        assert_eq!(
+            proof.verify(&wrong_root),
+            Err(ProofError::RootMismatch)
+        );
+    }
+
+    #[test]
+    fn test_absence_proof_serialization() {
+        let mut tree = SparseMerkleTree::new();
+        tree.insert(&FactId::from_json_value(&json!({"other": "fact"})));
+        
+        let absent = FactId::from_json_value(&json!({"absent": "fact"}));
+        let proof = NonMembershipProof::generate(&tree, &absent).unwrap();
+        
+        let json = serde_json::to_string(&proof).unwrap();
+        let restored: NonMembershipProof = serde_json::from_str(&json).unwrap();
+        
+        assert!(restored.verify(tree.root()).is_ok());
+    }
+
+    #[test]
+    fn test_absence_proof_invalid_after_insertion() {
+        let mut tree = SparseMerkleTree::new();
+        let fact = FactId::from_json_value(&json!({"will_be_added": true}));
+        
+        let proof = NonMembershipProof::generate(&tree, &fact).unwrap();
+        let old_root = *tree.root();
+        
+        assert!(proof.verify(&old_root).is_ok());
+        
+        tree.insert(&fact);
+        let new_root = *tree.root();
+        
+        assert_eq!(
+            proof.verify(&new_root),
+            Err(ProofError::RootMismatch)
+        );
+    }
+
+    #[test]
+    fn test_membership_vs_absence_mutually_exclusive() {
+        let mut tree = SparseMerkleTree::new();
+        let fact = FactId::from_json_value(&json!({"test": "fact"}));
+        
+        assert!(MembershipProof::generate(&tree, &fact).is_none());
+        assert!(NonMembershipProof::generate(&tree, &fact).is_some());
+        
+        tree.insert(&fact);
+        
+        assert!(MembershipProof::generate(&tree, &fact).is_some());
+        assert!(NonMembershipProof::generate(&tree, &fact).is_none());
+    }
+
+    #[test]
+    fn test_proof_pinned_to_root() {
+        let mut tree = SparseMerkleTree::new();
+        let fact_a = FactId::from_json_value(&json!({"a": 1}));
+        tree.insert(&fact_a);
+        let root_v1 = *tree.root();
+        
+        let absent_b = FactId::from_json_value(&json!({"b": 2}));
+        let absence_proof_b = NonMembershipProof::generate(&tree, &absent_b).unwrap();
+        
+        assert!(absence_proof_b.verify(&root_v1).is_ok());
+        
+        tree.insert(&absent_b);
+        let root_v2 = *tree.root();
+        
+        assert!(absence_proof_b.verify(&root_v1).is_ok());
+        assert!(absence_proof_b.verify(&root_v2).is_err());
     }
 }

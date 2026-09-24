@@ -108,7 +108,7 @@ impl SparseMerkleTree {
                 Self::hash_pair(&current_hash, &sibling_hash)
             };
             
-            let node_path = Self::node_path(&key, depth + 1);
+            let node_path = Self::path_for_depth(&key, depth + 1);
             self.nodes.insert((depth + 1, node_path), parent_hash);
             current_hash = parent_hash;
         }
@@ -144,29 +144,34 @@ impl SparseMerkleTree {
         hasher.finalize().into()
     }
 
-    /// Get the sibling's path prefix at a given depth.
+    /// Get the sibling's path at a given depth.
+    /// At depth d (from leaves), paths have (256-d) significant bits.
     fn sibling_path(key: &[u8; 32], depth: usize) -> [u8; 32] {
         let mut path = *key;
         let bit_idx = TREE_DEPTH - 1 - depth;
         let byte_idx = bit_idx / 8;
         let bit_in_byte = 7 - (bit_idx % 8);
         path[byte_idx] ^= 1 << bit_in_byte;
-        Self::truncate_path(&path, depth + 1)
+        Self::truncate_to_bits(&path, TREE_DEPTH - depth)
     }
 
-    /// Get the node's path prefix at a given depth.
-    fn node_path(key: &[u8; 32], depth: usize) -> [u8; 32] {
-        Self::truncate_path(key, depth)
+    /// Get the canonical path for a node at a given depth.
+    /// At depth d, the path has (256-d) significant bits.
+    fn path_for_depth(key: &[u8; 32], depth: usize) -> [u8; 32] {
+        Self::truncate_to_bits(key, TREE_DEPTH - depth)
     }
 
-    /// Truncate path to only include bits 0..depth.
-    fn truncate_path(key: &[u8; 32], depth: usize) -> [u8; 32] {
-        if depth >= TREE_DEPTH {
+    /// Truncate path to only include the first `num_bits` bits.
+    fn truncate_to_bits(key: &[u8; 32], num_bits: usize) -> [u8; 32] {
+        if num_bits >= TREE_DEPTH {
             return *key;
         }
+        if num_bits == 0 {
+            return [0u8; 32];
+        }
         let mut result = [0u8; 32];
-        let full_bytes = depth / 8;
-        let remaining_bits = depth % 8;
+        let full_bytes = num_bits / 8;
+        let remaining_bits = num_bits % 8;
         
         result[..full_bytes].copy_from_slice(&key[..full_bytes]);
         if remaining_bits > 0 && full_bytes < 32 {

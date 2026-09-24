@@ -1,0 +1,9 @@
+[
+  {"user": "alice", "action": "login", "timestamp": "2026-09-24T10:00:00Z"},
+  {"user": "alice", "action": "view_profile"},
+  {"user": "alice", "action": "update_settings", "setting": "theme", "value": "dark"},
+  {"user": "bob", "action": "login", "timestamp": "2026-09-24T10:05:00Z"},
+  {"user": "bob", "action": "create_document", "doc_id": "doc-001"},
+  {"user": "charlie", "action": "login"},
+  {"user": "charlie", "action": "view_document", "doc_id": "doc-001"}
+]

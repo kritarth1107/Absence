@@ -1,0 +1,6 @@
+{
+  "type": "absence",
+  "fact_id": "a3e4d5f6789012345678901234567890123456789012345678901234567890ab",
+  "note": "This is an example proof format. Real proofs have 256 sibling hashes.",
+  "siblings": []
+}

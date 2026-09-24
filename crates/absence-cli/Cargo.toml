@@ -1,0 +1,18 @@
+[package]
+name = "absence-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "CLI for Absence sparse Merkle tree operations"
+
+[[bin]]
+name = "absence"
+path = "src/main.rs"
+
+[dependencies]
+absence = { path = "../absence" }
+clap.workspace = true
+serde_json.workspace = true
+hex.workspace = true

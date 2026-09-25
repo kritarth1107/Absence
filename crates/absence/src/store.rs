@@ -6,6 +6,7 @@
 //! - Generating presence proofs (proving a fact was recorded)
 //! - Verifying proofs against pinned roots
 //! - Epoch checkpoints for historical root pinning
+//! - Batch absence prove/verify
 
 use crate::proof::{MembershipProof, NonMembershipProof, ProofError};
 use crate::smt::{NodeHash, SparseMerkleTree};
@@ -49,6 +50,12 @@ pub enum StoreError {
 
     #[error("unknown epoch: {0}")]
     UnknownEpoch(EpochId),
+
+    #[error("batch prove failed for fact at index {index}: {reason}")]
+    BatchProve { index: usize, reason: String },
+
+    #[error("batch verify failed for proof at index {index}: {reason}")]
+    BatchVerify { index: usize, reason: String },
 
     #[error("proof verification failed: {0}")]
     ProofError(#[from] ProofError),
@@ -266,6 +273,65 @@ impl AbsenceStore {
     /// This is a static method - verifiers don't need the full store.
     pub fn verify_present(proof: &MembershipProof, root: &NodeHash) -> Result<(), ProofError> {
         proof.verify(root)
+    }
+
+    /// Prove absence for many fact IDs against the current root.
+    ///
+    /// Fails fast if any fact is present (cannot prove absence).
+    pub fn prove_absent_batch(
+        &self,
+        fact_ids: &[FactId],
+    ) -> Result<Vec<NonMembershipProof>, StoreError> {
+        let mut proofs = Vec::with_capacity(fact_ids.len());
+        for (index, fact_id) in fact_ids.iter().enumerate() {
+            match self.prove_absent(fact_id) {
+                Ok(p) => proofs.push(p),
+                Err(e) => {
+                    return Err(StoreError::BatchProve {
+                        index,
+                        reason: e.to_string(),
+                    });
+                }
+            }
+        }
+        Ok(proofs)
+    }
+
+    /// Prove absence for many JSON values.
+    pub fn prove_absent_batch_json(
+        &self,
+        values: &[serde_json::Value],
+    ) -> Result<Vec<NonMembershipProof>, StoreError> {
+        let fact_ids: Vec<FactId> = values.iter().map(FactId::from_json_value).collect();
+        self.prove_absent_batch(&fact_ids)
+    }
+
+    /// Verify many absence proofs against a shared root.
+    ///
+    /// All proofs must verify; returns the first failure index on error.
+    pub fn verify_absent_batch(
+        proofs: &[NonMembershipProof],
+        root: &NodeHash,
+    ) -> Result<(), StoreError> {
+        for (index, proof) in proofs.iter().enumerate() {
+            if let Err(e) = proof.verify(root) {
+                return Err(StoreError::BatchVerify {
+                    index,
+                    reason: e.to_string(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Serialize a batch of absence proofs to JSON.
+    pub fn batch_proofs_to_json(proofs: &[NonMembershipProof]) -> Result<String, StoreError> {
+        Ok(serde_json::to_string_pretty(proofs)?)
+    }
+
+    /// Deserialize a batch of absence proofs from JSON.
+    pub fn batch_proofs_from_json(json: &str) -> Result<Vec<NonMembershipProof>, StoreError> {
+        Ok(serde_json::from_str(json)?)
     }
 }
 
@@ -513,5 +579,69 @@ mod tests {
         let back: Checkpoint = serde_json::from_str(&json).unwrap();
         assert_eq!(cp, back);
         assert_eq!(cp.root_hex().len(), 64);
+    }
+    #[test]
+    fn test_prove_absent_batch() {
+        let mut store = AbsenceStore::new();
+        store.record_json(&json!({"kept": 1})).unwrap();
+
+        let ids = vec![
+            FactId::from_json_value(&json!({"missing": "a"})),
+            FactId::from_json_value(&json!({"missing": "b"})),
+            FactId::from_json_value(&json!({"missing": "c"})),
+        ];
+        let proofs = store.prove_absent_batch(&ids).unwrap();
+        assert_eq!(proofs.len(), 3);
+        assert!(AbsenceStore::verify_absent_batch(&proofs, store.root()).is_ok());
+    }
+
+    #[test]
+    fn test_prove_absent_batch_json() {
+        let store = AbsenceStore::new();
+        let values = vec![json!({"x": 1}), json!({"x": 2})];
+        let proofs = store.prove_absent_batch_json(&values).unwrap();
+        assert_eq!(proofs.len(), 2);
+        assert!(AbsenceStore::verify_absent_batch(&proofs, store.root()).is_ok());
+    }
+
+    #[test]
+    fn test_prove_absent_batch_fails_if_present() {
+        let mut store = AbsenceStore::new();
+        let present = FactId::from_json_value(&json!({"present": true}));
+        store.record(&present).unwrap();
+        let ids = vec![
+            FactId::from_json_value(&json!({"absent": true})),
+            present,
+        ];
+        match store.prove_absent_batch(&ids) {
+            Err(StoreError::BatchProve { index, .. }) => assert_eq!(index, 1),
+            other => panic!("expected BatchProve, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_verify_absent_batch_wrong_root() {
+        let store = AbsenceStore::new();
+        let ids = vec![FactId::from_json_value(&json!({"a": 1}))];
+        let proofs = store.prove_absent_batch(&ids).unwrap();
+        let wrong = [0xFFu8; 32];
+        match AbsenceStore::verify_absent_batch(&proofs, &wrong) {
+            Err(StoreError::BatchVerify { index, .. }) => assert_eq!(index, 0),
+            other => panic!("expected BatchVerify, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_batch_proofs_json_roundtrip() {
+        let store = AbsenceStore::new();
+        let ids = vec![
+            FactId::from_json_value(&json!({"j": 1})),
+            FactId::from_json_value(&json!({"j": 2})),
+        ];
+        let proofs = store.prove_absent_batch(&ids).unwrap();
+        let json = AbsenceStore::batch_proofs_to_json(&proofs).unwrap();
+        let restored = AbsenceStore::batch_proofs_from_json(&json).unwrap();
+        assert_eq!(restored.len(), 2);
+        assert!(AbsenceStore::verify_absent_batch(&restored, store.root()).is_ok());
     }
 }

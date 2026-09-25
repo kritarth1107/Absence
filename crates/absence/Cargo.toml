@@ -15,3 +15,11 @@ thiserror.workspace = true
 hex.workspace = true
 
 [dev-dependencies]
+
+[[example]]
+name = "basic"
+path = "../../examples/basic.rs"
+
+[[example]]
+name = "epoch_batch"
+path = "../../examples/epoch_batch.rs"

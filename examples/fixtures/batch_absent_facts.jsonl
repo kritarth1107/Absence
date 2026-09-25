@@ -1,0 +1,3 @@
+{"user": "alice", "action": "delete_all"}
+{"user": "eve", "action": "login"}
+{"admin": true, "action": "wipe"}

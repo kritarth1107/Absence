@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-09-25
+
+### Added
+
+- **Epoch checkpoints**
+  - `EpochId` (`u64`) and `Checkpoint { epoch, root, fact_count, unix_ts }`
+  - `AbsenceStore::checkpoint`, `checkpoints`, `checkpoint_at`, `set_checkpoint_history`
+  - `verify_absent_at_epoch` / `verify_absent_at_checkpoint` for pinned historical roots
+  - Checkpoint history persisted in the CLI store JSON
+
+- **Batch absence proofs**
+  - `prove_absent_batch` / `prove_absent_batch_json`
+  - `verify_absent_batch` against a shared root
+  - JSON helpers `batch_proofs_to_json` / `batch_proofs_from_json`
+  - CLI: `prove-absent-batch` (multi JSON args or `--file` JSON lines), `verify-batch`
+
+- **CompactProof** (`compact` module)
+  - Length-prefixed binary encode/decode for membership and non-membership proofs
+  - Hex wrappers; CLI `compact-encode` / `compact-decode`
+
+- **CLI**
+  - `checkpoint` / `checkpoints`
+  - `verify --epoch` against a stored checkpoint root
+
+- **Examples / fixtures**
+  - `examples/epoch_batch.rs`
+  - `examples/fixtures/batch_absent_facts.jsonl`
+
+### Security
+
+- Still a **toy/research** implementation — NOT zero-knowledge, NOT audited
+
 ## [0.1.0] - 2026-09-24
 
 ### Added
@@ -55,4 +87,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - NOT zero-knowledge (standard Merkle proofs)
 - NOT audited
 
+[0.2.0]: https://github.com/kritarth1107/Absence/releases/tag/v0.2.0
 [0.1.0]: https://github.com/kritarth1107/Absence/releases/tag/v0.1.0

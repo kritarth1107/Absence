@@ -23,7 +23,12 @@ fn main() {
     // Epoch 0 checkpoint
     let cp0 = store.checkpoint();
     println!();
-    println!("checkpoint epoch {}: root={} facts={}", cp0.epoch, cp0.root_hex(), cp0.fact_count);
+    println!(
+        "checkpoint epoch {}: root={} facts={}",
+        cp0.epoch,
+        cp0.root_hex(),
+        cp0.fact_count
+    );
 
     // Batch-prove several absences against current root
     let missing = vec![
@@ -33,7 +38,10 @@ fn main() {
     ];
     let proofs = store.prove_absent_batch_json(&missing).unwrap();
     AbsenceStore::verify_absent_batch(&proofs, store.root()).unwrap();
-    println!("batch absence: {} proofs OK against current root", proofs.len());
+    println!(
+        "batch absence: {} proofs OK against current root",
+        proofs.len()
+    );
 
     // Compact encode the first proof
     let compact_hex = CompactProof::encode_absence_hex(&proofs[0]);
@@ -51,7 +59,12 @@ fn main() {
         .unwrap();
     let cp1 = store.checkpoint();
     println!();
-    println!("checkpoint epoch {}: root={} facts={}", cp1.epoch, cp1.root_hex(), cp1.fact_count);
+    println!(
+        "checkpoint epoch {}: root={} facts={}",
+        cp1.epoch,
+        cp1.root_hex(),
+        cp1.fact_count
+    );
 
     let still_missing = FactId::from_json_value(&json!({"user": "eve", "action": "login"}));
     let proof_now = store.prove_absent(&still_missing).unwrap();
@@ -63,7 +76,12 @@ fn main() {
     println!();
     println!("history ({} checkpoints):", store.checkpoints().len());
     for cp in store.checkpoints() {
-        println!("  epoch={} facts={} root={}", cp.epoch, cp.fact_count, &cp.root_hex()[..16]);
+        println!(
+            "  epoch={} facts={} root={}",
+            cp.epoch,
+            cp.fact_count,
+            &cp.root_hex()[..16]
+        );
     }
 
     println!();

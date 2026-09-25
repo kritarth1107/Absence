@@ -11,9 +11,12 @@ Absence provides cryptographic proofs that a key/fact is NOT in a committed set,
 - **Sparse Merkle Tree** with correct empty-subtree default hashes (depth-256, keyed by fact-id bits)
 - **Non-membership (absence) proofs** — prove a fact was never recorded (PRIMARY)
 - **Membership proofs** — prove a fact was recorded (secondary)
+- **Epoch checkpoints** — pin historical roots (`Checkpoint`) and verify absence at an epoch
+- **Batch absence** — prove/verify many absences against one root
+- **CompactProof** — length-prefixed binary (and hex) encoding for proofs
 - **Content-addressed fact IDs** — SHA-256 of RFC 8785 (JCS) canonical JSON
 - **AbsenceStore API** — high-level interface for recording facts and generating proofs
-- **CLI** — `absence` binary for encoding, inserting, proving, and verifying
+- **CLI** — `absence` binary for encoding, inserting, proving, verifying, epochs, batch, compact
 
 ## Installation
 
@@ -52,6 +55,28 @@ let proof = store.prove_absent_json(&dangerous_action).unwrap();
 assert!(AbsenceStore::verify_absent(&proof, &commitment.root).is_ok());
 ```
 
+### Epochs, batch, and compact proofs
+
+```rust
+use absence::{AbsenceStore, CompactProof};
+use serde_json::json;
+
+let mut store = AbsenceStore::new();
+store.record_json(&json!({"user": "alice", "action": "login"})).unwrap();
+let cp = store.checkpoint(); // epoch 0
+
+let missing = vec![
+    json!({"user": "alice", "action": "delete_all"}),
+    json!({"user": "eve", "action": "login"}),
+];
+let proofs = store.prove_absent_batch_json(&missing).unwrap();
+AbsenceStore::verify_absent_batch(&proofs, &cp.root).unwrap();
+
+let hex = CompactProof::encode_absence_hex(&proofs[0]);
+let restored = CompactProof::decode_absence_hex(&hex).unwrap();
+assert!(store.verify_absent_at_epoch(&restored, 0).is_ok());
+```
+
 ### CLI Usage
 
 ```bash
@@ -64,14 +89,28 @@ absence insert '{"user": "alice", "action": "login"}' '{"user": "bob", "action":
 # Show current root hash
 absence root
 
+# Snapshot an epoch checkpoint (persisted in the store file)
+absence checkpoint
+absence checkpoints
+
 # Prove a fact is absent and write proof to file
 absence prove-absent '{"user": "alice", "action": "delete_all"}' -o proof.json
 
-# Verify an absence proof
+# Batch-prove absences (args or --file JSON lines)
+absence prove-absent-batch '{"x":1}' '{"x":2}' -o batch.json
+absence prove-absent-batch --file examples/fixtures/batch_absent_facts.jsonl -o batch.json
+absence verify-batch batch.json --root <root-hex>
+
+# CompactProof hex
+absence compact-encode proof.json
+absence compact-decode <hex>
+
+# Verify an absence proof (optionally against --epoch)
 absence verify proof.json --root <root-hex>
+absence verify proof.json --epoch 0 --store absence.store --root unused
 ```
 
-## Scope & Limitations (v0.1.0)
+## Scope & Limitations (v0.2.0)
 
 | Aspect | Status | Notes |
 |--------|--------|-------|
@@ -81,7 +120,9 @@ absence verify proof.json --root <root-hex>
 | ZK-SNARK | **No** | Not a zero-knowledge proof system |
 | RSA accumulator | **No** | Uses Merkle tree, not accumulator-based |
 | Production ready | **No** | Research/toy implementation; not audited |
-| Persistence | **JSON file** | Simple file-based storage; no database |
+| Persistence | **JSON file** | Simple file-based storage; checkpoints in store JSON |
+| Epochs | **Pinned roots** | Checkpoints store root/count/ts; no historical tree rewind |
+| CompactProof | **Encoding only** | Smaller than JSON siblings; still full Merkle path |
 
 ## How It Works
 
@@ -99,6 +140,10 @@ absence verify proof.json --root <root-hex>
 
 4. **Membership Proof**: Same structure, but uses the actual leaf hash.
 
+5. **Epoch checkpoint**: `checkpoint()` records `(epoch, root, fact_count, unix_ts)`. Later proofs can be checked with `verify_absent_at_epoch` against that pinned root.
+
+6. **Batch / CompactProof**: Many absence proofs share one root; CompactProof packs `fact_id || u16_le(len) || siblings` for transport.
+
 ## Project Structure
 
 ```
@@ -108,9 +153,10 @@ crates/
       fact_id.rs    # Content-addressed fact IDs
       smt.rs        # Sparse Merkle Tree
       proof.rs      # Membership & non-membership proofs
-      store.rs      # High-level AbsenceStore API
+      store.rs      # High-level AbsenceStore API (+ epochs, batch)
+      compact.rs    # CompactProof binary/hex encoding
   absence-cli/      # CLI binary
-examples/           # Usage examples
+examples/           # Usage examples (basic, epoch_batch)
 ```
 
 ## Related Work

@@ -293,7 +293,11 @@ fn load_store(path: &PathBuf) -> (AbsenceStore, StoreFile) {
 fn save_store(path: &PathBuf, store: &AbsenceStore, fact_ids: &[String]) {
     let store_file = StoreFile {
         fact_ids: fact_ids.to_vec(),
-        checkpoints: store.checkpoints().iter().map(StoredCheckpoint::from).collect(),
+        checkpoints: store
+            .checkpoints()
+            .iter()
+            .map(StoredCheckpoint::from)
+            .collect(),
     };
     let content = serde_json::to_string_pretty(&store_file).expect("Failed to serialize store");
     fs::write(path, content).expect("Failed to write store file");
@@ -734,4 +738,3 @@ fn cmd_verify(proof_path: &PathBuf, root_hex: &str, epoch: Option<u64>, store_pa
         }
     }
 }
-

@@ -559,9 +559,7 @@ mod tests {
         let cp = store.checkpoint();
 
         let mut restored = AbsenceStore::new();
-        restored
-            .record_json(&json!({"x": 1}))
-            .unwrap();
+        restored.record_json(&json!({"x": 1})).unwrap();
         restored.set_checkpoint_history(vec![cp]);
         assert_eq!(restored.checkpoints().len(), 1);
         assert_eq!(restored.checkpoint_at(0).unwrap().root, cp.root);
@@ -609,10 +607,7 @@ mod tests {
         let mut store = AbsenceStore::new();
         let present = FactId::from_json_value(&json!({"present": true}));
         store.record(&present).unwrap();
-        let ids = vec![
-            FactId::from_json_value(&json!({"absent": true})),
-            present,
-        ];
+        let ids = vec![FactId::from_json_value(&json!({"absent": true})), present];
         match store.prove_absent_batch(&ids) {
             Err(StoreError::BatchProve { index, .. }) => assert_eq!(index, 1),
             other => panic!("expected BatchProve, got {:?}", other),

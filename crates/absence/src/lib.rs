@@ -10,4 +10,4 @@ pub mod store;
 pub use fact_id::FactId;
 pub use proof::{MembershipProof, NonMembershipProof};
 pub use smt::SparseMerkleTree;
-pub use store::AbsenceStore;
+pub use store::{AbsenceStore, Checkpoint, Commitment, EpochId, StoreError};

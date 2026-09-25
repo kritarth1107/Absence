@@ -5,12 +5,35 @@
 //! - Generating absence proofs (proving a fact was never recorded)
 //! - Generating presence proofs (proving a fact was recorded)
 //! - Verifying proofs against pinned roots
+//! - Epoch checkpoints for historical root pinning
 
 use crate::proof::{MembershipProof, NonMembershipProof, ProofError};
 use crate::smt::{NodeHash, SparseMerkleTree};
 use crate::FactId;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+
+/// Epoch identifier (monotonic counter over checkpoints).
+pub type EpochId = u64;
+
+/// A pinned historical root commitment.
+///
+/// Created via [`AbsenceStore::checkpoint`]. Proofs can be verified against
+/// a specific epoch's root with [`AbsenceStore::verify_absent_at_epoch`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Checkpoint {
+    pub epoch: EpochId,
+    pub root: [u8; 32],
+    pub fact_count: u64,
+    pub unix_ts: u64,
+}
+
+impl Checkpoint {
+    /// Root hash as hex.
+    pub fn root_hex(&self) -> String {
+        hex::encode(self.root)
+    }
+}
 
 /// Errors that can occur in AbsenceStore operations.
 #[derive(Debug, Error)]
@@ -23,6 +46,9 @@ pub enum StoreError {
 
     #[error("fact is recorded (cannot prove absence)")]
     FactPresent,
+
+    #[error("unknown epoch: {0}")]
+    UnknownEpoch(EpochId),
 
     #[error("proof verification failed: {0}")]
     ProofError(#[from] ProofError),
@@ -74,6 +100,7 @@ impl Commitment {
 #[derive(Clone, Debug)]
 pub struct AbsenceStore {
     tree: SparseMerkleTree,
+    checkpoints: Vec<Checkpoint>,
 }
 
 impl Default for AbsenceStore {
@@ -87,6 +114,7 @@ impl AbsenceStore {
     pub fn new() -> Self {
         Self {
             tree: SparseMerkleTree::new(),
+            checkpoints: Vec::new(),
         }
     }
 
@@ -111,6 +139,64 @@ impl AbsenceStore {
     /// Check if the store is empty.
     pub fn is_empty(&self) -> bool {
         self.tree.is_empty()
+    }
+
+    /// Snapshot the current root as a numbered epoch checkpoint.
+    ///
+    /// Epoch IDs start at 0 and increment with each call. The checkpoint is
+    /// retained in-memory (and should be persisted by the caller / CLI store file).
+    pub fn checkpoint(&mut self) -> Checkpoint {
+        let epoch = self.checkpoints.len() as EpochId;
+        let unix_ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let cp = Checkpoint {
+            epoch,
+            root: *self.tree.root(),
+            fact_count: self.tree.len() as u64,
+            unix_ts,
+        };
+        self.checkpoints.push(cp);
+        cp
+    }
+
+    /// All retained checkpoints (oldest first).
+    pub fn checkpoints(&self) -> &[Checkpoint] {
+        &self.checkpoints
+    }
+
+    /// Look up a checkpoint by epoch id.
+    pub fn checkpoint_at(&self, epoch: EpochId) -> Option<&Checkpoint> {
+        self.checkpoints.iter().find(|c| c.epoch == epoch)
+    }
+
+    /// Replace checkpoint history (e.g. when loading a persisted store).
+    ///
+    /// Does not modify the tree. Callers must ensure the history is consistent
+    /// with the reconstructed fact set.
+    pub fn set_checkpoint_history(&mut self, checkpoints: Vec<Checkpoint>) {
+        self.checkpoints = checkpoints;
+    }
+
+    /// Verify an absence proof against a pinned epoch checkpoint root.
+    pub fn verify_absent_at_epoch(
+        &self,
+        proof: &NonMembershipProof,
+        epoch: EpochId,
+    ) -> Result<(), StoreError> {
+        let cp = self
+            .checkpoint_at(epoch)
+            .ok_or(StoreError::UnknownEpoch(epoch))?;
+        Ok(proof.verify(&cp.root)?)
+    }
+
+    /// Verify an absence proof against an explicit checkpoint (no store lookup).
+    pub fn verify_absent_at_checkpoint(
+        proof: &NonMembershipProof,
+        checkpoint: &Checkpoint,
+    ) -> Result<(), ProofError> {
+        proof.verify(&checkpoint.root)
     }
 
     /// Record a fact by its ID.
@@ -354,5 +440,78 @@ mod tests {
         let hex = commitment.root_hex();
         assert_eq!(hex.len(), 64);
         assert!(hex.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn test_checkpoint_epochs() {
+        let mut store = AbsenceStore::new();
+        store.record_json(&json!({"a": 1})).unwrap();
+        let cp0 = store.checkpoint();
+        assert_eq!(cp0.epoch, 0);
+        assert_eq!(cp0.fact_count, 1);
+        assert_eq!(cp0.root, *store.root());
+
+        store.record_json(&json!({"b": 2})).unwrap();
+        let cp1 = store.checkpoint();
+        assert_eq!(cp1.epoch, 1);
+        assert_eq!(cp1.fact_count, 2);
+        assert_ne!(cp0.root, cp1.root);
+
+        assert_eq!(store.checkpoints().len(), 2);
+        assert_eq!(store.checkpoint_at(0).unwrap().root, cp0.root);
+        assert_eq!(store.checkpoint_at(1).unwrap().root, cp1.root);
+        assert!(store.checkpoint_at(99).is_none());
+    }
+
+    #[test]
+    fn test_verify_absent_at_epoch() {
+        let mut store = AbsenceStore::new();
+        store.record_json(&json!({"kept": true})).unwrap();
+        let cp0 = store.checkpoint();
+
+        let later = FactId::from_json_value(&json!({"later": true}));
+        let proof_at_0 = store.prove_absent(&later).unwrap();
+        assert!(store.verify_absent_at_epoch(&proof_at_0, 0).is_ok());
+        assert!(AbsenceStore::verify_absent_at_checkpoint(&proof_at_0, &cp0).is_ok());
+
+        store.record(&later).unwrap();
+        store.checkpoint();
+
+        // Proof still valid against epoch 0 root, not against epoch 1
+        assert!(store.verify_absent_at_epoch(&proof_at_0, 0).is_ok());
+        assert!(store.verify_absent_at_epoch(&proof_at_0, 1).is_err());
+        assert!(matches!(
+            store.verify_absent_at_epoch(&proof_at_0, 99),
+            Err(StoreError::UnknownEpoch(99))
+        ));
+    }
+
+    #[test]
+    fn test_checkpoint_history_restore() {
+        let mut store = AbsenceStore::new();
+        store.record_json(&json!({"x": 1})).unwrap();
+        let cp = store.checkpoint();
+
+        let mut restored = AbsenceStore::new();
+        restored
+            .record_json(&json!({"x": 1}))
+            .unwrap();
+        restored.set_checkpoint_history(vec![cp]);
+        assert_eq!(restored.checkpoints().len(), 1);
+        assert_eq!(restored.checkpoint_at(0).unwrap().root, cp.root);
+    }
+
+    #[test]
+    fn test_checkpoint_serde() {
+        let cp = Checkpoint {
+            epoch: 3,
+            root: [0xABu8; 32],
+            fact_count: 7,
+            unix_ts: 1_700_000_000,
+        };
+        let json = serde_json::to_string(&cp).unwrap();
+        let back: Checkpoint = serde_json::from_str(&json).unwrap();
+        assert_eq!(cp, back);
+        assert_eq!(cp.root_hex().len(), 64);
     }
 }

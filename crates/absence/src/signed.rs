@@ -18,6 +18,7 @@
 //! This ensures signatures cannot be replayed across different contexts.
 
 use crate::keys::{SignerKey, VerifierKey};
+use crate::proof::{MembershipProof, NonMembershipProof, ProofError};
 use crate::store::Checkpoint;
 use ed25519_dalek::{Signature, Signer, Verifier};
 use serde::{Deserialize, Serialize};
@@ -40,6 +41,9 @@ pub enum SignedError {
 
     #[error("invalid hex: {0}")]
     HexDecode(#[from] hex::FromHexError),
+
+    #[error("merkle proof verification failed: {0}")]
+    ProofInvalid(#[from] ProofError),
 }
 
 /// A checkpoint with an Ed25519 signature for trustless verification.
@@ -184,6 +188,142 @@ pub fn verify_signed_checkpoint(
     signed.verify(verifier)
 }
 
+/// A root attestation binds an absence or membership proof to a signed checkpoint.
+///
+/// This allows a verifier to trust both:
+/// 1. The Merkle proof is valid against the checkpoint's root
+/// 2. The checkpoint root was signed by a trusted key
+///
+/// # Example
+///
+/// ```
+/// use absence::{AbsenceStore, SignerKey, RootAttestation};
+/// use serde_json::json;
+///
+/// let mut store = AbsenceStore::new();
+/// store.record_json(&json!({"recorded": true})).unwrap();
+/// let checkpoint = store.checkpoint();
+///
+/// let signer = SignerKey::generate();
+/// let absent_fact = json!({"absent": true});
+/// let proof = store.prove_absent_json(&absent_fact).unwrap();
+///
+/// let attestation = RootAttestation::attest_absent(&proof, &checkpoint, &signer);
+///
+/// // Verifier checks both proof and signature
+/// let verifier = signer.verifier();
+/// assert!(attestation.verify_absent(&verifier).is_ok());
+/// ```
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RootAttestation {
+    /// The signed checkpoint that attests to the root.
+    pub signed_checkpoint: SignedCheckpoint,
+    /// The absence proof (if attesting absence).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub absence_proof: Option<NonMembershipProof>,
+    /// The membership proof (if attesting membership).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub membership_proof: Option<MembershipProof>,
+}
+
+impl RootAttestation {
+    /// Create an attestation for an absence (non-membership) proof.
+    pub fn attest_absent(
+        proof: &NonMembershipProof,
+        checkpoint: &Checkpoint,
+        signer: &SignerKey,
+    ) -> Self {
+        Self {
+            signed_checkpoint: SignedCheckpoint::sign(checkpoint, signer),
+            absence_proof: Some(proof.clone()),
+            membership_proof: None,
+        }
+    }
+
+    /// Create an attestation for a membership (presence) proof.
+    pub fn attest_present(
+        proof: &MembershipProof,
+        checkpoint: &Checkpoint,
+        signer: &SignerKey,
+    ) -> Self {
+        Self {
+            signed_checkpoint: SignedCheckpoint::sign(checkpoint, signer),
+            absence_proof: None,
+            membership_proof: Some(proof.clone()),
+        }
+    }
+
+    /// Verify the attestation as an absence proof.
+    ///
+    /// Checks:
+    /// 1. The checkpoint signature is valid against the verifier key
+    /// 2. The absence proof is valid against the checkpoint's root
+    ///
+    /// Returns an error if either check fails or no absence proof is present.
+    pub fn verify_absent(&self, verifier: &VerifierKey) -> Result<(), SignedError> {
+        self.signed_checkpoint.verify(verifier)?;
+
+        let proof = self
+            .absence_proof
+            .as_ref()
+            .ok_or(SignedError::SignatureInvalid)?;
+        proof.verify(&self.signed_checkpoint.checkpoint.root)?;
+        Ok(())
+    }
+
+    /// Verify the attestation as a membership proof.
+    ///
+    /// Checks:
+    /// 1. The checkpoint signature is valid against the verifier key
+    /// 2. The membership proof is valid against the checkpoint's root
+    ///
+    /// Returns an error if either check fails or no membership proof is present.
+    pub fn verify_present(&self, verifier: &VerifierKey) -> Result<(), SignedError> {
+        self.signed_checkpoint.verify(verifier)?;
+
+        let proof = self
+            .membership_proof
+            .as_ref()
+            .ok_or(SignedError::SignatureInvalid)?;
+        proof.verify(&self.signed_checkpoint.checkpoint.root)?;
+        Ok(())
+    }
+
+    /// Get the checkpoint this attestation is bound to.
+    pub fn checkpoint(&self) -> &Checkpoint {
+        &self.signed_checkpoint.checkpoint
+    }
+
+    /// Get the fact ID from the proof (absence or membership).
+    pub fn fact_id(&self) -> Option<crate::FactId> {
+        if let Some(ref p) = self.absence_proof {
+            Some(p.fact_id())
+        } else {
+            self.membership_proof.as_ref().map(|p| p.fact_id())
+        }
+    }
+}
+
+/// Verify an attested absence proof.
+///
+/// Convenience function that wraps [`RootAttestation::verify_absent`].
+pub fn verify_attested_absent(
+    attestation: &RootAttestation,
+    verifier: &VerifierKey,
+) -> Result<(), SignedError> {
+    attestation.verify_absent(verifier)
+}
+
+/// Verify an attested membership proof.
+///
+/// Convenience function that wraps [`RootAttestation::verify_present`].
+pub fn verify_attested_present(
+    attestation: &RootAttestation,
+    verifier: &VerifierKey,
+) -> Result<(), SignedError> {
+    attestation.verify_present(verifier)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -309,5 +449,124 @@ mod tests {
         let signed = SignedCheckpoint::sign(&checkpoint, &signer);
         let extracted = signed.signer_verifier().unwrap();
         assert_eq!(extracted.to_hex(), signer.verifier().to_hex());
+    }
+
+    // ============= ROOT ATTESTATION TESTS =============
+
+    #[test]
+    fn test_attestation_absent() {
+        let mut store = AbsenceStore::new();
+        store.record_json(&json!({"recorded": true})).unwrap();
+        let checkpoint = store.checkpoint();
+
+        let signer = SignerKey::generate();
+        let verifier = signer.verifier();
+
+        let absent = crate::FactId::from_json_value(&json!({"absent": true}));
+        let proof = store.prove_absent(&absent).unwrap();
+
+        let attestation = RootAttestation::attest_absent(&proof, &checkpoint, &signer);
+        assert!(attestation.verify_absent(&verifier).is_ok());
+    }
+
+    #[test]
+    fn test_attestation_present() {
+        let mut store = AbsenceStore::new();
+        let fact_id = store.record_json(&json!({"recorded": true})).unwrap();
+        let checkpoint = store.checkpoint();
+
+        let signer = SignerKey::generate();
+        let verifier = signer.verifier();
+
+        let proof = store.prove_present(&fact_id).unwrap();
+
+        let attestation = RootAttestation::attest_present(&proof, &checkpoint, &signer);
+        assert!(attestation.verify_present(&verifier).is_ok());
+    }
+
+    #[test]
+    fn test_attestation_wrong_key() {
+        let mut store = AbsenceStore::new();
+        store.record_json(&json!({"recorded": true})).unwrap();
+        let checkpoint = store.checkpoint();
+
+        let signer = SignerKey::generate();
+        let wrong_verifier = SignerKey::generate().verifier();
+
+        let absent = crate::FactId::from_json_value(&json!({"absent": true}));
+        let proof = store.prove_absent(&absent).unwrap();
+
+        let attestation = RootAttestation::attest_absent(&proof, &checkpoint, &signer);
+        assert!(attestation.verify_absent(&wrong_verifier).is_err());
+    }
+
+    #[test]
+    fn test_attestation_tampered_root() {
+        let mut store = AbsenceStore::new();
+        store.record_json(&json!({"recorded": true})).unwrap();
+        let checkpoint = store.checkpoint();
+
+        let signer = SignerKey::generate();
+        let verifier = signer.verifier();
+
+        let absent = crate::FactId::from_json_value(&json!({"absent": true}));
+        let proof = store.prove_absent(&absent).unwrap();
+
+        let mut attestation = RootAttestation::attest_absent(&proof, &checkpoint, &signer);
+        attestation.signed_checkpoint.checkpoint.root[0] ^= 0xFF;
+
+        // Signature check fails (root was signed, then tampered)
+        assert!(attestation.verify_absent(&verifier).is_err());
+    }
+
+    #[test]
+    fn test_attestation_serde() {
+        let mut store = AbsenceStore::new();
+        store.record_json(&json!({"recorded": true})).unwrap();
+        let checkpoint = store.checkpoint();
+
+        let signer = SignerKey::generate();
+        let verifier = signer.verifier();
+
+        let absent = crate::FactId::from_json_value(&json!({"absent": true}));
+        let proof = store.prove_absent(&absent).unwrap();
+
+        let attestation = RootAttestation::attest_absent(&proof, &checkpoint, &signer);
+        let json_str = serde_json::to_string_pretty(&attestation).unwrap();
+        let restored: RootAttestation = serde_json::from_str(&json_str).unwrap();
+
+        assert!(restored.verify_absent(&verifier).is_ok());
+    }
+
+    #[test]
+    fn test_attestation_fact_id() {
+        let mut store = AbsenceStore::new();
+        store.record_json(&json!({"recorded": true})).unwrap();
+        let checkpoint = store.checkpoint();
+
+        let signer = SignerKey::generate();
+
+        let absent = crate::FactId::from_json_value(&json!({"absent": true}));
+        let proof = store.prove_absent(&absent).unwrap();
+
+        let attestation = RootAttestation::attest_absent(&proof, &checkpoint, &signer);
+        let extracted = attestation.fact_id().unwrap();
+        assert_eq!(extracted.to_hex(), absent.to_hex());
+    }
+
+    #[test]
+    fn test_verify_attested_convenience() {
+        let mut store = AbsenceStore::new();
+        store.record_json(&json!({"recorded": true})).unwrap();
+        let checkpoint = store.checkpoint();
+
+        let signer = SignerKey::generate();
+        let verifier = signer.verifier();
+
+        let absent = crate::FactId::from_json_value(&json!({"absent": true}));
+        let proof = store.prove_absent(&absent).unwrap();
+
+        let attestation = RootAttestation::attest_absent(&proof, &checkpoint, &signer);
+        assert!(verify_attested_absent(&attestation, &verifier).is_ok());
     }
 }

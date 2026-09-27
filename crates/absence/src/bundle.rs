@@ -50,7 +50,11 @@ pub struct WitnessBundle {
 
 impl WitnessBundle {
     /// Create a new bundle with the given proofs.
-    pub fn new(checkpoint: &Checkpoint, signer: &SignerKey, proofs: Vec<NonMembershipProof>) -> Self {
+    pub fn new(
+        checkpoint: &Checkpoint,
+        signer: &SignerKey,
+        proofs: Vec<NonMembershipProof>,
+    ) -> Self {
         Self {
             signed_checkpoint: SignedCheckpoint::sign(checkpoint, signer),
             proofs,
@@ -58,7 +62,10 @@ impl WitnessBundle {
     }
 
     /// Create a bundle from an existing signed checkpoint.
-    pub fn from_signed(signed_checkpoint: SignedCheckpoint, proofs: Vec<NonMembershipProof>) -> Self {
+    pub fn from_signed(
+        signed_checkpoint: SignedCheckpoint,
+        proofs: Vec<NonMembershipProof>,
+    ) -> Self {
         Self {
             signed_checkpoint,
             proofs,
@@ -194,7 +201,10 @@ impl CompactBundle {
             .next()
             .ok_or(BundleDecodeError::EmptyInput)?
             .to_string();
-        let proof_hexes: Vec<String> = lines.map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect();
+        let proof_hexes: Vec<String> = lines
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect();
         Ok(Self {
             checkpoint_json,
             proof_hexes,
@@ -279,12 +289,8 @@ mod tests {
         let signer = SignerKey::generate();
         let verifier = signer.verifier();
 
-        let proof1 = store
-            .prove_absent_json(&json!({"missing": 1}))
-            .unwrap();
-        let proof2 = store
-            .prove_absent_json(&json!({"missing": 2}))
-            .unwrap();
+        let proof1 = store.prove_absent_json(&json!({"missing": 1})).unwrap();
+        let proof2 = store.prove_absent_json(&json!({"missing": 2})).unwrap();
 
         let mut bundle = WitnessBundle::new(&checkpoint, &signer, vec![proof1]);
         assert_eq!(bundle.proof_count(), 1);

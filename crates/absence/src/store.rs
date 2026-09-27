@@ -730,7 +730,11 @@ mod tests {
         restored.set_signed_checkpoint_history(vec![signed.clone()]);
 
         assert_eq!(restored.signed_checkpoints().len(), 1);
-        assert!(restored.signed_checkpoint_at(0).unwrap().verify(&signer.verifier()).is_ok());
+        assert!(restored
+            .signed_checkpoint_at(0)
+            .unwrap()
+            .verify(&signer.verifier())
+            .is_ok());
     }
 
     #[test]

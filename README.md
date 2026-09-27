@@ -12,11 +12,14 @@ Absence provides cryptographic proofs that a key/fact is NOT in a committed set,
 - **Non-membership (absence) proofs** — prove a fact was never recorded (PRIMARY)
 - **Membership proofs** — prove a fact was recorded (secondary)
 - **Epoch checkpoints** — pin historical roots (`Checkpoint`) and verify absence at an epoch
+- **Signed checkpoints** (v0.3.0) — Ed25519 signatures over checkpoints for trustless verification
+- **Root attestations** (v0.3.0) — bind proofs to signed checkpoints for full verification
+- **WitnessBundle** (v0.3.0) — portable packages of signed checkpoints + batch proofs
 - **Batch absence** — prove/verify many absences against one root
 - **CompactProof** — length-prefixed binary (and hex) encoding for proofs
 - **Content-addressed fact IDs** — SHA-256 of RFC 8785 (JCS) canonical JSON
 - **AbsenceStore API** — high-level interface for recording facts and generating proofs
-- **CLI** — `absence` binary for encoding, inserting, proving, verifying, epochs, batch, compact
+- **CLI** — `absence` binary for encoding, inserting, proving, verifying, signing, attesting
 
 ## Installation
 
@@ -77,6 +80,33 @@ let restored = CompactProof::decode_absence_hex(&hex).unwrap();
 assert!(store.verify_absent_at_epoch(&restored, 0).is_ok());
 ```
 
+### Signed checkpoints (v0.3.0)
+
+```rust
+use absence::{AbsenceStore, SignerKey, RootAttestation};
+use serde_json::json;
+
+let mut store = AbsenceStore::new();
+store.record_json(&json!({"user": "alice", "action": "login"})).unwrap();
+
+// Generate a signing keypair (store the secret securely!)
+let signer = SignerKey::generate();
+let verifier = signer.verifier();
+println!("Public key: {}", verifier.to_hex());
+
+// Create a signed checkpoint
+let signed = store.checkpoint_signed(&signer);
+assert!(signed.verify(&verifier).is_ok());
+
+// Create an attested absence proof
+let absent = json!({"user": "eve", "action": "login"});
+let proof = store.prove_absent_json(&absent).unwrap();
+let attestation = RootAttestation::attest_absent(&proof, &signed.checkpoint, &signer);
+
+// Verifier checks BOTH the proof AND the signature
+assert!(attestation.verify_absent(&verifier).is_ok());
+```
+
 ### CLI Usage
 
 ```bash
@@ -108,19 +138,38 @@ absence compact-decode <hex>
 # Verify an absence proof (optionally against --epoch)
 absence verify proof.json --root <root-hex>
 absence verify proof.json --epoch 0 --store absence.store --root unused
+
+# === Signed checkpoints (v0.3.0) ===
+
+# Generate a signing keypair
+absence keygen -o my.key
+# Output: Public key: abc123...
+
+# Sign the latest checkpoint
+absence sign-checkpoint -k my.key -o signed.json
+
+# Verify a signed checkpoint
+absence verify-checkpoint signed.json --pubkey abc123...
+
+# Create a signed absence attestation
+absence attest-absent '{"user": "eve"}' -k my.key -o attestation.json
+
+# Verify an attestation
+absence verify-attestation attestation.json --pubkey abc123...
 ```
 
-## Scope & Limitations (v0.2.0)
+## Scope & Limitations (v0.3.0)
 
 | Aspect | Status | Notes |
 |--------|--------|-------|
 | Scale | **Toy** | Tested with ≤4096 keys; no performance optimization |
 | Cryptographic security | **Commitment + opening** | Standard Merkle proofs, NOT zero-knowledge |
+| Signed checkpoints | **Ed25519** | Verifiers trust root without trusting store operator |
 | Privacy | **Limited** | Proves absence without revealing set contents, but proof size reveals nothing extra |
 | ZK-SNARK | **No** | Not a zero-knowledge proof system |
 | RSA accumulator | **No** | Uses Merkle tree, not accumulator-based |
 | Production ready | **No** | Research/toy implementation; not audited |
-| Persistence | **JSON file** | Simple file-based storage; checkpoints in store JSON |
+| Persistence | **JSON file** | Simple file-based storage; checkpoints + signed in store JSON |
 | Epochs | **Pinned roots** | Checkpoints store root/count/ts; no historical tree rewind |
 | CompactProof | **Encoding only** | Smaller than JSON siblings; still full Merkle path |
 
@@ -142,7 +191,11 @@ absence verify proof.json --epoch 0 --store absence.store --root unused
 
 5. **Epoch checkpoint**: `checkpoint()` records `(epoch, root, fact_count, unix_ts)`. Later proofs can be checked with `verify_absent_at_epoch` against that pinned root.
 
-6. **Batch / CompactProof**: Many absence proofs share one root; CompactProof packs `fact_id || u16_le(len) || siblings` for transport.
+6. **Signed checkpoint** (v0.3.0): `SignedCheckpoint` wraps a checkpoint with an Ed25519 signature over a domain-separated canonical message (`absence.v1.signed-checkpoint`). Verifiers can trust the root without trusting the store operator — they only need the signer's public key.
+
+7. **Root attestation** (v0.3.0): `RootAttestation` binds an absence (or membership) proof to a signed checkpoint. `verify_absent()` checks BOTH the Merkle proof AND the signature in one call.
+
+8. **Batch / CompactProof**: Many absence proofs share one root; CompactProof packs `fact_id || u16_le(len) || siblings` for transport. `WitnessBundle` packages a signed checkpoint with multiple proofs.
 
 ## Project Structure
 
@@ -153,10 +206,13 @@ crates/
       fact_id.rs    # Content-addressed fact IDs
       smt.rs        # Sparse Merkle Tree
       proof.rs      # Membership & non-membership proofs
-      store.rs      # High-level AbsenceStore API (+ epochs, batch)
+      store.rs      # High-level AbsenceStore API (+ epochs, batch, signed)
       compact.rs    # CompactProof binary/hex encoding
+      keys.rs       # Ed25519 SignerKey / VerifierKey (v0.3.0)
+      signed.rs     # SignedCheckpoint, RootAttestation (v0.3.0)
+      bundle.rs     # WitnessBundle (v0.3.0)
   absence-cli/      # CLI binary
-examples/           # Usage examples (basic, epoch_batch)
+examples/           # Usage examples (basic, epoch_batch, signed_checkpoint)
 ```
 
 ## Related Work

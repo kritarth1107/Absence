@@ -89,7 +89,6 @@ impl SignerKey {
         }
     }
 
-    #[allow(dead_code)] // Used by signed module
     pub(crate) fn signing_key(&self) -> &SigningKey {
         &self.inner
     }
@@ -184,7 +183,6 @@ impl VerifierKey {
         hex::encode(self.to_bytes())
     }
 
-    #[allow(dead_code)] // Used by signed module
     pub(crate) fn verifying_key(&self) -> &VerifyingKey {
         &self.inner
     }

@@ -5,6 +5,51 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-09-27
+
+### Added
+
+- **Signed checkpoints** — cryptographic attestation of epoch roots
+  - `SignerKey` / `VerifierKey`: Ed25519 keypair generation, hex serialization
+  - `SignedCheckpoint`: wraps Checkpoint with Ed25519 signature over domain-separated canonical message (`absence.v1.signed-checkpoint`)
+  - `sign_checkpoint()` / `verify_signed_checkpoint()` convenience APIs
+  - Domain separation prevents signature replay across contexts
+
+- **Root attestation** — bind proofs to signed checkpoints
+  - `RootAttestation`: combines SignedCheckpoint with absence/membership proof
+  - `verify_absent()` / `verify_present()`: checks BOTH Merkle proof AND signature
+  - Full serde support for portable JSON transport
+
+- **WitnessBundle** — portable proof packages
+  - `WitnessBundle`: SignedCheckpoint + Vec<NonMembershipProof>
+  - `verify_all()`: verifies signature and all proofs in one call
+  - `CompactBundle`: wire-efficient multi-line format
+
+- **AbsenceStore integration**
+  - `checkpoint_signed(signer)`: create and sign checkpoint in one call
+  - `signed_checkpoints()` / `signed_checkpoint_at(epoch)`: query signed history
+  - Store persistence includes signed checkpoints (backward compatible)
+
+- **CLI commands** (v0.3.0)
+  - `keygen`: Generate Ed25519 keypair
+  - `sign-checkpoint`: Sign a checkpoint from the store
+  - `verify-checkpoint`: Verify a signed checkpoint
+  - `attest-absent`: Create a RootAttestation for an absent fact
+  - `verify-attestation`: Verify a RootAttestation
+
+- **Dependencies**
+  - `ed25519-dalek` 2.1 for Ed25519 signing
+  - `rand` 0.8 for secure key generation
+
+- **Examples**
+  - `signed_checkpoint.rs`: comprehensive demo of signing workflow
+
+### Security
+
+- Signed checkpoints allow verifiers to trust roots without trusting the store operator
+- Still a **toy/research** implementation — NOT zero-knowledge, NOT audited
+- See THREAT_MODEL.md for signature security analysis
+
 ## [0.2.0] - 2026-09-25
 
 ### Added
@@ -87,5 +132,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - NOT zero-knowledge (standard Merkle proofs)
 - NOT audited
 
+[0.3.0]: https://github.com/kritarth1107/Absence/releases/tag/v0.3.0
 [0.2.0]: https://github.com/kritarth1107/Absence/releases/tag/v0.2.0
 [0.1.0]: https://github.com/kritarth1107/Absence/releases/tag/v0.1.0

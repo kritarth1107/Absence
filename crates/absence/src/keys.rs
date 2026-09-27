@@ -162,8 +162,7 @@ impl VerifierKey {
         }
         let mut arr = [0u8; PUBLIC_KEY_LEN];
         arr.copy_from_slice(bytes);
-        let inner =
-            VerifyingKey::from_bytes(&arr).map_err(|_| KeyError::InvalidKeyBytes)?;
+        let inner = VerifyingKey::from_bytes(&arr).map_err(|_| KeyError::InvalidKeyBytes)?;
         Ok(Self { inner })
     }
 

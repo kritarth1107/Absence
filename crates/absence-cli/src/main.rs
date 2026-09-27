@@ -169,7 +169,6 @@ enum Commands {
     },
 
     // ============= SIGNED CHECKPOINT COMMANDS =============
-
     /// Generate a new Ed25519 signing keypair
     Keygen {
         /// Output file for the secret key (hex)
@@ -335,9 +334,10 @@ fn main() {
             epoch,
             output,
         } => cmd_attest_absent(&store, &key, &json, epoch, output),
-        Commands::VerifyAttestation { attestation, pubkey } => {
-            cmd_verify_attestation(&attestation, &pubkey)
-        }
+        Commands::VerifyAttestation {
+            attestation,
+            pubkey,
+        } => cmd_verify_attestation(&attestation, &pubkey),
     }
 }
 
@@ -989,7 +989,10 @@ fn cmd_verify_attestation(attestation_path: &PathBuf, pubkey_hex: &str) {
 
     match attestation.verify_absent(&verifier) {
         Ok(()) => {
-            let fact_id = attestation.fact_id().map(|f| f.to_hex()).unwrap_or_default();
+            let fact_id = attestation
+                .fact_id()
+                .map(|f| f.to_hex())
+                .unwrap_or_default();
             println!("✓ Attestation VALID");
             println!("  Fact ID {} is NOT in the committed set.", fact_id);
             println!("  Epoch: {}", attestation.checkpoint().epoch);

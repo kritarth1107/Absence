@@ -85,6 +85,42 @@ If two different JSON values produce the same fact ID (SHA-256 collision):
 - SHA-256 collisions are considered computationally infeasible
 - This is NOT a practical concern
 
+## Signed Checkpoints (v0.3.0)
+
+### What Signed Checkpoints Provide
+
+`SignedCheckpoint` wraps a checkpoint with an Ed25519 signature:
+
+- **Root attestation**: A trusted signer vouches for a specific root hash
+- **Domain separation**: Signatures include `absence.v1.signed-checkpoint` prefix
+- **Verifier independence**: Verifiers trust the signer's public key, not the store operator
+
+### Additional Security Assumptions
+
+1. **Ed25519 security**: Standard elliptic curve assumptions for digital signatures
+2. **Signing key secrecy**: The signing key must remain secret; compromise allows forgery
+3. **Public key distribution**: Verifiers must obtain the correct public key through trusted channels
+
+### Signed Checkpoint Attack Vectors
+
+**Key compromise**: If the signing key is stolen, an attacker can sign arbitrary roots.
+- Mitigation: Secure key storage, key rotation, consider HSMs for high-value deployments
+
+**Outdated signatures**: An old signed checkpoint is still valid.
+- A signed root from T1 may not reflect facts added at T2
+- Include timestamps; verifiers should check recency when relevant
+
+**Domain confusion**: Without domain separation, signatures could be replayed in other contexts.
+- Mitigated by `absence.v1.signed-checkpoint` domain prefix
+
+### RootAttestation Security
+
+`RootAttestation` binds a proof to a signed checkpoint:
+
+- Verifies BOTH Merkle proof AND signature in one call
+- Prevents proof/root mismatches (proof verified against wrong root)
+- Does NOT provide non-repudiation (signer can claim key compromise)
+
 ## Recommended Use Cases
 
 ✓ **Agent memory auditing**: Prove an agent never stored specific data

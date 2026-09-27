@@ -106,7 +106,10 @@ fn main() {
     // Step 10: Verify the bundle
     println!("10. Verifying WitnessBundle...");
     match bundle.verify_all(&verifier) {
-        Ok(()) => println!("    ✓ Bundle VALID (signature + {} proofs)", bundle.proof_count()),
+        Ok(()) => println!(
+            "    ✓ Bundle VALID (signature + {} proofs)",
+            bundle.proof_count()
+        ),
         Err(e) => println!("    ✗ Bundle INVALID: {}", e),
     }
     println!();
@@ -114,7 +117,10 @@ fn main() {
     // Step 11: Compact bundle encoding
     println!("11. Compact bundle encoding...");
     let compact_hexes = bundle.proofs_to_compact_hex();
-    println!("    Proof hex lengths: {:?}", compact_hexes.iter().map(|h| h.len()).collect::<Vec<_>>());
+    println!(
+        "    Proof hex lengths: {:?}",
+        compact_hexes.iter().map(|h| h.len()).collect::<Vec<_>>()
+    );
     println!();
 
     // Summary

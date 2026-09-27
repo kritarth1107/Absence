@@ -8,7 +8,9 @@
 //! - Epoch checkpoints for historical root pinning
 //! - Batch absence prove/verify
 
+use crate::keys::SignerKey;
 use crate::proof::{MembershipProof, NonMembershipProof, ProofError};
+use crate::signed::SignedCheckpoint;
 use crate::smt::{NodeHash, SparseMerkleTree};
 use crate::FactId;
 use serde::{Deserialize, Serialize};
@@ -108,6 +110,7 @@ impl Commitment {
 pub struct AbsenceStore {
     tree: SparseMerkleTree,
     checkpoints: Vec<Checkpoint>,
+    signed_checkpoints: Vec<SignedCheckpoint>,
 }
 
 impl Default for AbsenceStore {
@@ -122,6 +125,7 @@ impl AbsenceStore {
         Self {
             tree: SparseMerkleTree::new(),
             checkpoints: Vec::new(),
+            signed_checkpoints: Vec::new(),
         }
     }
 
@@ -184,6 +188,41 @@ impl AbsenceStore {
     /// with the reconstructed fact set.
     pub fn set_checkpoint_history(&mut self, checkpoints: Vec<Checkpoint>) {
         self.checkpoints = checkpoints;
+    }
+
+    /// Snapshot the current root as a signed checkpoint.
+    ///
+    /// Like [`checkpoint`](Self::checkpoint), but also signs the checkpoint
+    /// with the provided signing key for trustless verification.
+    pub fn checkpoint_signed(&mut self, signer: &SignerKey) -> SignedCheckpoint {
+        let cp = self.checkpoint();
+        let signed = SignedCheckpoint::sign(&cp, signer);
+        self.signed_checkpoints.push(signed.clone());
+        signed
+    }
+
+    /// All retained signed checkpoints (oldest first).
+    pub fn signed_checkpoints(&self) -> &[SignedCheckpoint] {
+        &self.signed_checkpoints
+    }
+
+    /// Look up a signed checkpoint by epoch id.
+    pub fn signed_checkpoint_at(&self, epoch: EpochId) -> Option<&SignedCheckpoint> {
+        self.signed_checkpoints
+            .iter()
+            .find(|s| s.checkpoint.epoch == epoch)
+    }
+
+    /// Replace signed checkpoint history (e.g. when loading a persisted store).
+    pub fn set_signed_checkpoint_history(&mut self, signed: Vec<SignedCheckpoint>) {
+        self.signed_checkpoints = signed;
+    }
+
+    /// Add a signed checkpoint without creating a new unsigned one.
+    ///
+    /// Useful when loading from persistence or when signing an existing checkpoint.
+    pub fn add_signed_checkpoint(&mut self, signed: SignedCheckpoint) {
+        self.signed_checkpoints.push(signed);
     }
 
     /// Verify an absence proof against a pinned epoch checkpoint root.
@@ -638,5 +677,75 @@ mod tests {
         let restored = AbsenceStore::batch_proofs_from_json(&json).unwrap();
         assert_eq!(restored.len(), 2);
         assert!(AbsenceStore::verify_absent_batch(&restored, store.root()).is_ok());
+    }
+
+    // ============= SIGNED CHECKPOINT TESTS =============
+
+    #[test]
+    fn test_checkpoint_signed() {
+        use crate::SignerKey;
+
+        let mut store = AbsenceStore::new();
+        store.record_json(&json!({"fact": 1})).unwrap();
+
+        let signer = SignerKey::generate();
+        let signed = store.checkpoint_signed(&signer);
+
+        assert_eq!(signed.checkpoint.epoch, 0);
+        assert!(signed.verify(&signer.verifier()).is_ok());
+        assert_eq!(store.signed_checkpoints().len(), 1);
+    }
+
+    #[test]
+    fn test_signed_checkpoint_at() {
+        use crate::SignerKey;
+
+        let mut store = AbsenceStore::new();
+        store.record_json(&json!({"fact": 1})).unwrap();
+
+        let signer = SignerKey::generate();
+        let _signed0 = store.checkpoint_signed(&signer);
+
+        store.record_json(&json!({"fact": 2})).unwrap();
+        let _signed1 = store.checkpoint_signed(&signer);
+
+        assert_eq!(store.signed_checkpoint_at(0).unwrap().checkpoint.epoch, 0);
+        assert_eq!(store.signed_checkpoint_at(1).unwrap().checkpoint.epoch, 1);
+        assert!(store.signed_checkpoint_at(99).is_none());
+    }
+
+    #[test]
+    fn test_set_signed_checkpoint_history() {
+        use crate::SignerKey;
+
+        let mut store = AbsenceStore::new();
+        store.record_json(&json!({"fact": 1})).unwrap();
+
+        let signer = SignerKey::generate();
+        let signed = store.checkpoint_signed(&signer);
+
+        let mut restored = AbsenceStore::new();
+        restored.record_json(&json!({"fact": 1})).unwrap();
+        restored.set_checkpoint_history(vec![signed.checkpoint]);
+        restored.set_signed_checkpoint_history(vec![signed.clone()]);
+
+        assert_eq!(restored.signed_checkpoints().len(), 1);
+        assert!(restored.signed_checkpoint_at(0).unwrap().verify(&signer.verifier()).is_ok());
+    }
+
+    #[test]
+    fn test_add_signed_checkpoint() {
+        use crate::SignerKey;
+
+        let mut store = AbsenceStore::new();
+        store.record_json(&json!({"fact": 1})).unwrap();
+        let cp = store.checkpoint();
+
+        let signer = SignerKey::generate();
+        let signed = crate::SignedCheckpoint::sign(&cp, &signer);
+        store.add_signed_checkpoint(signed.clone());
+
+        assert_eq!(store.signed_checkpoints().len(), 1);
+        assert!(store.signed_checkpoint_at(0).is_some());
     }
 }

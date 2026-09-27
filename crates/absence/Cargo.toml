@@ -25,3 +25,7 @@ path = "../../examples/basic.rs"
 [[example]]
 name = "epoch_batch"
 path = "../../examples/epoch_batch.rs"
+
+[[example]]
+name = "signed_checkpoint"
+path = "../../examples/signed_checkpoint.rs"

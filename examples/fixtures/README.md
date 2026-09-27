@@ -7,6 +7,7 @@ This directory contains sample data for testing and examples.
 - `sample_facts.json` - Example facts that might be recorded in a store
 - `sample_absence_proof.json` - Example proof format (incomplete, for illustration)
 - `batch_absent_facts.jsonl` - JSON lines of facts to prove absent (for `prove-absent-batch --file`)
+- `signed_checkpoint.json` - Example SignedCheckpoint format (v0.3.0+)
 
 ## Usage
 

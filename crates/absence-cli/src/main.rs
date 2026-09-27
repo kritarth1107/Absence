@@ -9,9 +9,12 @@
 //! - prove-absent-batch / verify-batch: Batch absence proofs
 //! - compact-encode / compact-decode: CompactProof hex
 //! - verify: Verify a proof against a root
+//! - keygen / sign-checkpoint / verify-checkpoint: Ed25519 signed checkpoints
+//! - attest-absent / verify-attestation: RootAttestation for verified proofs
 
 use absence::{
     AbsenceStore, Checkpoint, CompactProof, FactId, MembershipProof, NonMembershipProof,
+    RootAttestation, SignedCheckpoint, SignerKey, VerifierKey,
 };
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
@@ -164,6 +167,76 @@ enum Commands {
         #[arg(short, long, default_value = "absence.store")]
         store: PathBuf,
     },
+
+    // ============= SIGNED CHECKPOINT COMMANDS =============
+
+    /// Generate a new Ed25519 signing keypair
+    Keygen {
+        /// Output file for the secret key (hex)
+        #[arg(short, long, default_value = "absence.key")]
+        output: PathBuf,
+    },
+
+    /// Sign a checkpoint with an Ed25519 key
+    SignCheckpoint {
+        /// Path to the store file
+        #[arg(short, long, default_value = "absence.store")]
+        store: PathBuf,
+
+        /// Path to the signing key file (hex)
+        #[arg(short, long, default_value = "absence.key")]
+        key: PathBuf,
+
+        /// Epoch to sign (defaults to latest)
+        #[arg(long)]
+        epoch: Option<u64>,
+
+        /// Output file for the signed checkpoint (stdout if not specified)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+
+    /// Verify a signed checkpoint
+    VerifyCheckpoint {
+        /// Path to the signed checkpoint JSON file
+        signed: PathBuf,
+
+        /// Public key (hex) to verify against
+        #[arg(short, long)]
+        pubkey: String,
+    },
+
+    /// Create a RootAttestation (signed proof) for an absent fact
+    AttestAbsent {
+        /// Path to the store file
+        #[arg(short, long, default_value = "absence.store")]
+        store: PathBuf,
+
+        /// Path to the signing key file (hex)
+        #[arg(short, long, default_value = "absence.key")]
+        key: PathBuf,
+
+        /// JSON value to prove absent
+        json: String,
+
+        /// Epoch to attest against (defaults to latest)
+        #[arg(long)]
+        epoch: Option<u64>,
+
+        /// Output file for the attestation (stdout if not specified)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+
+    /// Verify a RootAttestation
+    VerifyAttestation {
+        /// Path to the attestation JSON file
+        attestation: PathBuf,
+
+        /// Public key (hex) to verify against
+        #[arg(short, long)]
+        pubkey: String,
+    },
 }
 
 /// Serializable store format (facts + checkpoint history)
@@ -172,6 +245,8 @@ struct StoreFile {
     fact_ids: Vec<String>,
     #[serde(default)]
     checkpoints: Vec<StoredCheckpoint>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    signed_checkpoints: Vec<SignedCheckpoint>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -245,6 +320,24 @@ fn main() {
             epoch,
             store,
         } => cmd_verify(&proof, &root, epoch, &store),
+        Commands::Keygen { output } => cmd_keygen(&output),
+        Commands::SignCheckpoint {
+            store,
+            key,
+            epoch,
+            output,
+        } => cmd_sign_checkpoint(&store, &key, epoch, output),
+        Commands::VerifyCheckpoint { signed, pubkey } => cmd_verify_checkpoint(&signed, &pubkey),
+        Commands::AttestAbsent {
+            store,
+            key,
+            json,
+            epoch,
+            output,
+        } => cmd_attest_absent(&store, &key, &json, epoch, output),
+        Commands::VerifyAttestation { attestation, pubkey } => {
+            cmd_verify_attestation(&attestation, &pubkey)
+        }
     }
 }
 
@@ -286,6 +379,7 @@ fn load_store(path: &PathBuf) -> (AbsenceStore, StoreFile) {
         .map(StoredCheckpoint::to_checkpoint)
         .collect();
     store.set_checkpoint_history(checkpoints);
+    store.set_signed_checkpoint_history(store_file.signed_checkpoints.clone());
 
     (store, store_file)
 }
@@ -298,6 +392,7 @@ fn save_store(path: &PathBuf, store: &AbsenceStore, fact_ids: &[String]) {
             .iter()
             .map(StoredCheckpoint::from)
             .collect(),
+        signed_checkpoints: store.signed_checkpoints().to_vec(),
     };
     let content = serde_json::to_string_pretty(&store_file).expect("Failed to serialize store");
     fs::write(path, content).expect("Failed to write store file");
@@ -735,6 +830,178 @@ fn cmd_verify(proof_path: &PathBuf, root_hex: &str, epoch: Option<u64>, store_pa
                     std::process::exit(1);
                 }
             }
+        }
+    }
+}
+
+// ============= SIGNED CHECKPOINT COMMANDS =============
+
+fn cmd_keygen(output: &PathBuf) {
+    let signer = SignerKey::generate();
+    let secret_hex = signer.to_hex();
+    let public_hex = signer.verifier().to_hex();
+
+    fs::write(output, &secret_hex).expect("Failed to write key file");
+    println!("Generated Ed25519 keypair");
+    println!("Secret key saved to: {:?}", output);
+    println!("Public key (share this): {}", public_hex);
+    println!();
+    println!("IMPORTANT: Keep your secret key file secure!");
+}
+
+fn load_signer(key_path: &PathBuf) -> SignerKey {
+    let hex = fs::read_to_string(key_path).expect("Failed to read key file");
+    SignerKey::from_hex(&hex).expect("Invalid signing key")
+}
+
+fn cmd_sign_checkpoint(
+    store_path: &PathBuf,
+    key_path: &PathBuf,
+    epoch: Option<u64>,
+    output: Option<PathBuf>,
+) {
+    let (store, _) = load_store(store_path);
+    let signer = load_signer(key_path);
+
+    let checkpoint = match epoch {
+        Some(ep) => match store.checkpoint_at(ep) {
+            Some(cp) => *cp,
+            None => {
+                eprintln!("Error: unknown epoch {}", ep);
+                std::process::exit(1);
+            }
+        },
+        None => {
+            if store.checkpoints().is_empty() {
+                eprintln!("Error: no checkpoints in store (run 'absence checkpoint' first)");
+                std::process::exit(1);
+            }
+            *store.checkpoints().last().unwrap()
+        }
+    };
+
+    let signed = SignedCheckpoint::sign(&checkpoint, &signer);
+    let json_out = serde_json::to_string_pretty(&signed).unwrap();
+
+    match output {
+        Some(path) => {
+            fs::write(&path, &json_out).expect("Failed to write signed checkpoint");
+            println!("Signed checkpoint written to {:?}", path);
+            println!("Epoch: {}", signed.checkpoint.epoch);
+            println!("Public key: {}", signed.signer_public_key);
+        }
+        None => {
+            println!("{}", json_out);
+        }
+    }
+}
+
+fn cmd_verify_checkpoint(signed_path: &PathBuf, pubkey_hex: &str) {
+    let content = fs::read_to_string(signed_path).expect("Failed to read signed checkpoint file");
+    let signed: SignedCheckpoint =
+        serde_json::from_str(&content).expect("Failed to parse signed checkpoint");
+
+    let verifier = VerifierKey::from_hex(pubkey_hex).expect("Invalid public key");
+
+    match signed.verify(&verifier) {
+        Ok(()) => {
+            println!("✓ Signed checkpoint VALID");
+            println!("  Epoch: {}", signed.checkpoint.epoch);
+            println!("  Root: {}", signed.checkpoint.root_hex());
+            println!("  Fact count: {}", signed.checkpoint.fact_count);
+            println!("  Unix ts: {}", signed.checkpoint.unix_ts);
+            println!("  Signer: {}", signed.signer_public_key);
+        }
+        Err(e) => {
+            eprintln!("✗ Signed checkpoint INVALID: {}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
+fn cmd_attest_absent(
+    store_path: &PathBuf,
+    key_path: &PathBuf,
+    json: &str,
+    epoch: Option<u64>,
+    output: Option<PathBuf>,
+) {
+    let (store, _) = load_store(store_path);
+    let signer = load_signer(key_path);
+
+    let checkpoint = match epoch {
+        Some(ep) => match store.checkpoint_at(ep) {
+            Some(cp) => *cp,
+            None => {
+                eprintln!("Error: unknown epoch {}", ep);
+                std::process::exit(1);
+            }
+        },
+        None => {
+            if store.checkpoints().is_empty() {
+                eprintln!("Error: no checkpoints in store (run 'absence checkpoint' first)");
+                std::process::exit(1);
+            }
+            *store.checkpoints().last().unwrap()
+        }
+    };
+
+    let value: serde_json::Value = match serde_json::from_str(json) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("Error parsing JSON: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    let fact_id = FactId::from_json_value(&value);
+    let proof = match store.prove_absent(&fact_id) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    let attestation = RootAttestation::attest_absent(&proof, &checkpoint, &signer);
+    let json_out = serde_json::to_string_pretty(&attestation).unwrap();
+
+    match output {
+        Some(path) => {
+            fs::write(&path, &json_out).expect("Failed to write attestation");
+            println!("Attestation written to {:?}", path);
+            println!("Fact ID: {}", fact_id.to_hex());
+            println!("Epoch: {}", checkpoint.epoch);
+            println!("Public key: {}", signer.verifier().to_hex());
+        }
+        None => {
+            println!("{}", json_out);
+        }
+    }
+}
+
+fn cmd_verify_attestation(attestation_path: &PathBuf, pubkey_hex: &str) {
+    let content = fs::read_to_string(attestation_path).expect("Failed to read attestation file");
+    let attestation: RootAttestation =
+        serde_json::from_str(&content).expect("Failed to parse attestation");
+
+    let verifier = VerifierKey::from_hex(pubkey_hex).expect("Invalid public key");
+
+    match attestation.verify_absent(&verifier) {
+        Ok(()) => {
+            let fact_id = attestation.fact_id().map(|f| f.to_hex()).unwrap_or_default();
+            println!("✓ Attestation VALID");
+            println!("  Fact ID {} is NOT in the committed set.", fact_id);
+            println!("  Epoch: {}", attestation.checkpoint().epoch);
+            println!("  Root: {}", attestation.checkpoint().root_hex());
+            println!(
+                "  Signer: {}",
+                attestation.signed_checkpoint.signer_public_key
+            );
+        }
+        Err(e) => {
+            eprintln!("✗ Attestation INVALID: {}", e);
+            std::process::exit(1);
         }
     }
 }

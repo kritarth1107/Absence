@@ -12,6 +12,7 @@ Absence provides cryptographic proofs that a key/fact is NOT in a committed set,
 - **Non-membership (absence) proofs** — prove a fact was never recorded (PRIMARY)
 - **Membership proofs** — prove a fact was recorded (secondary)
 - **Epoch checkpoints** — pin historical roots (`Checkpoint`) and verify absence at an epoch
+- **Append-only consistency proofs** (v0.4.0) — prove newer root = older root + additions only
 - **Signed checkpoints** (v0.3.0) — Ed25519 signatures over checkpoints for trustless verification
 - **Root attestations** (v0.3.0) — bind proofs to signed checkpoints for full verification
 - **WitnessBundle** (v0.3.0) — portable packages of signed checkpoints + batch proofs
@@ -80,6 +81,33 @@ let restored = CompactProof::decode_absence_hex(&hex).unwrap();
 assert!(store.verify_absent_at_epoch(&restored, 0).is_ok());
 ```
 
+### Append-only consistency proofs (v0.4.0)
+
+```rust
+use absence::{AbsenceStore, ConsistencyProof, FactId};
+use serde_json::json;
+
+let mut store = AbsenceStore::new();
+
+// Day 1: record initial facts and checkpoint
+let day1: Vec<FactId> = [
+    json!({"agent": "planner", "memory": "user prefers metric units"}),
+    json!({"agent": "planner", "memory": "project deadline is Sep 30"}),
+].iter().map(FactId::from_json_value).collect();
+store.record_batch_with_proof(&day1).unwrap();
+let cp0 = store.checkpoint();
+
+// Day 2: add more facts, get consistency proof
+let day2: Vec<FactId> = [json!({"agent": "planner", "memory": "shipped v0.4.0"})]
+    .iter().map(FactId::from_json_value).collect();
+let proof = store.record_batch_with_proof(&day2).unwrap();
+let cp1 = store.checkpoint();
+
+// Verifier checks epoch 1 is an append-only extension of epoch 0
+proof.verify_checkpoints(&cp0, &cp1).unwrap();
+println!("epoch 1 = epoch 0 + {} new facts", proof.len());
+```
+
 ### Signed checkpoints (v0.3.0)
 
 ```rust
@@ -139,6 +167,14 @@ absence compact-decode <hex>
 absence verify proof.json --root <root-hex>
 absence verify proof.json --epoch 0 --store absence.store --root unused
 
+# === Append-only consistency proofs (v0.4.0) ===
+
+# Prove epoch 1 is an append-only extension of epoch 0
+absence prove-consistency --from 0 --to 1 -o consistency.json
+
+# Verify a consistency proof
+absence verify-consistency consistency.json --old-root <old-hex> --new-root <new-hex>
+
 # === Signed checkpoints (v0.3.0) ===
 
 # Generate a signing keypair
@@ -158,13 +194,14 @@ absence attest-absent '{"user": "eve"}' -k my.key -o attestation.json
 absence verify-attestation attestation.json --pubkey abc123...
 ```
 
-## Scope & Limitations (v0.3.0)
+## Scope & Limitations (v0.4.0)
 
 | Aspect | Status | Notes |
 |--------|--------|-------|
 | Scale | **Toy** | Tested with ≤4096 keys; no performance optimization |
 | Cryptographic security | **Commitment + opening** | Standard Merkle proofs, NOT zero-knowledge |
 | Signed checkpoints | **Ed25519** | Verifiers trust root without trusting store operator |
+| Consistency proofs | **Append-only** | Prove newer root = older root + additions (v0.4.0) |
 | Privacy | **Limited** | Proves absence without revealing set contents, but proof size reveals nothing extra |
 | ZK-SNARK | **No** | Not a zero-knowledge proof system |
 | RSA accumulator | **No** | Uses Merkle tree, not accumulator-based |
@@ -197,6 +234,8 @@ absence verify-attestation attestation.json --pubkey abc123...
 
 8. **Batch / CompactProof**: Many absence proofs share one root; CompactProof packs `fact_id || u16_le(len) || siblings` for transport. `WitnessBundle` packages a signed checkpoint with multiple proofs.
 
+9. **Consistency proof** (v0.4.0): `ConsistencyProof` links an older root to a newer root via a sequence of absence proofs — one per added fact. Each step proves the fact was absent, then recomputes the root with that leaf present. If the final root matches the expected new root, the new tree is exactly `old ∪ added`, guaranteeing the log is append-only.
+
 ## Project Structure
 
 ```
@@ -206,13 +245,14 @@ crates/
       fact_id.rs    # Content-addressed fact IDs
       smt.rs        # Sparse Merkle Tree
       proof.rs      # Membership & non-membership proofs
-      store.rs      # High-level AbsenceStore API (+ epochs, batch, signed)
+      store.rs      # High-level AbsenceStore API (+ epochs, batch, signed, consistency)
       compact.rs    # CompactProof binary/hex encoding
       keys.rs       # Ed25519 SignerKey / VerifierKey (v0.3.0)
       signed.rs     # SignedCheckpoint, RootAttestation (v0.3.0)
       bundle.rs     # WitnessBundle (v0.3.0)
+      consistency.rs # ConsistencyProof for append-only verification (v0.4.0)
   absence-cli/      # CLI binary
-examples/           # Usage examples (basic, epoch_batch, signed_checkpoint)
+examples/           # Usage examples (basic, epoch_batch, signed_checkpoint, consistency)
 ```
 
 ## Related Work

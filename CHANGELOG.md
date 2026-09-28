@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-09-28
+
+### Added
+
+- **Append-only consistency proofs** — prove a newer root is an extension of an older root
+  - `ConsistencyProof`: sequence of absence proofs showing only facts were added, none removed
+  - `ConsistencyError`: errors for generation and verification failures
+  - `generate()`: build proof that appending facts to old tree yields new root
+  - `verify_self()`: replay proof from old_root to new_root
+  - `verify()`: verify against two explicit roots
+  - `verify_checkpoints()`: verify between two checkpoints, including fact-count delta
+
+- **AbsenceStore consistency integration**
+  - `record_batch_with_proof()`: append facts and return consistency proof (all-or-nothing)
+  - `verify_consistency()`: verify proof between two explicit roots
+  - `verify_consistency_between_epochs()`: verify proof between two epoch checkpoints
+
+- **CLI commands** (v0.4.0)
+  - `prove-consistency --from <epoch> --to <epoch>`: generate consistency proof between epochs
+  - `verify-consistency <proof.json> --old-root <hex> --new-root <hex>`: verify a consistency proof
+
+- **Examples**
+  - `consistency.rs`: demonstrate append-only proofs between epoch checkpoints
+
+### Security
+
+- Consistency proofs prevent forged removals or rewrites between roots
+- Verifiers can check that a log is truly append-only without full replay
+- Still a **toy/research** implementation — NOT audited
+
 ## [0.3.0] - 2026-09-27
 
 ### Added
@@ -132,6 +162,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - NOT zero-knowledge (standard Merkle proofs)
 - NOT audited
 
+[0.4.0]: https://github.com/kritarth1107/Absence/releases/tag/v0.4.0
 [0.3.0]: https://github.com/kritarth1107/Absence/releases/tag/v0.3.0
 [0.2.0]: https://github.com/kritarth1107/Absence/releases/tag/v0.2.0
 [0.1.0]: https://github.com/kritarth1107/Absence/releases/tag/v0.1.0

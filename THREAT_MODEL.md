@@ -121,11 +121,45 @@ If two different JSON values produce the same fact ID (SHA-256 collision):
 - Prevents proof/root mismatches (proof verified against wrong root)
 - Does NOT provide non-repudiation (signer can claim key compromise)
 
+## Consistency Proofs (v0.4.0)
+
+### What Consistency Proofs Provide
+
+`ConsistencyProof` demonstrates that a newer root is an append-only extension of an older root:
+
+- **Append-only**: The new tree = old tree + added facts; nothing was removed or rewritten
+- **Verifiable log growth**: Auditors can verify that a log grows monotonically
+- **Efficient verification**: O(n) where n = number of added facts (not total facts)
+
+### Security Properties
+
+- **Binding**: Cannot create a valid consistency proof for roots where facts were removed
+- **Determinism**: Same sequence of additions always produces the same proof
+- **Composability**: If A→B and B→C are valid proofs, then B is reachable from A
+
+### Consistency Proof Attack Vectors
+
+**Step tampering**: Modifying any step in the proof chain invalidates verification.
+- The `verify_self()` method replays all steps and checks final root
+
+**Step omission**: Removing steps causes final root mismatch.
+- Verifiers always check that replayed root equals claimed new_root
+
+**Reordering attacks**: Facts must be added in the exact order they appear in steps.
+- Reordering would change intermediate roots, causing verification failure
+
+### Limitations
+
+- Does NOT prove when facts were added (only that new root extends old)
+- Does NOT hide which facts were added (fact IDs are in the proof)
+- Verification requires O(n × depth) hash operations
+
 ## Recommended Use Cases
 
 ✓ **Agent memory auditing**: Prove an agent never stored specific data
 ✓ **Negative credentials**: Prove absence of a ban/restriction
 ✓ **Audit logs**: Prove an action was never logged
+✓ **Append-only verification**: Prove a log grew without deletions (v0.4.0)
 ✓ **Research/prototyping**: Understand sparse Merkle trees
 
 ## NOT Recommended For

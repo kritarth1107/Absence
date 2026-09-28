@@ -7,7 +7,9 @@
 //! - Verifying proofs against pinned roots
 //! - Epoch checkpoints for historical root pinning
 //! - Batch absence prove/verify
+//! - Append-only consistency proofs between roots / checkpoints
 
+use crate::consistency::{ConsistencyError, ConsistencyProof};
 use crate::keys::SignerKey;
 use crate::proof::{MembershipProof, NonMembershipProof, ProofError};
 use crate::signed::SignedCheckpoint;
@@ -58,6 +60,9 @@ pub enum StoreError {
 
     #[error("batch verify failed for proof at index {index}: {reason}")]
     BatchVerify { index: usize, reason: String },
+
+    #[error("consistency proof failed: {0}")]
+    Consistency(#[from] ConsistencyError),
 
     #[error("proof verification failed: {0}")]
     ProofError(#[from] ProofError),
@@ -371,6 +376,47 @@ impl AbsenceStore {
     /// Deserialize a batch of absence proofs from JSON.
     pub fn batch_proofs_from_json(json: &str) -> Result<Vec<NonMembershipProof>, StoreError> {
         Ok(serde_json::from_str(json)?)
+    }
+
+    // ============= CONSISTENCY PROOFS =============
+
+    /// Append `facts` and return a proof that the new root extends the old one.
+    ///
+    /// All-or-nothing: if any fact is already recorded (or repeated in
+    /// `facts`), nothing is recorded and an error is returned.
+    pub fn record_batch_with_proof(
+        &mut self,
+        facts: &[FactId],
+    ) -> Result<ConsistencyProof, StoreError> {
+        let proof = ConsistencyProof::generate(&self.tree, facts)?;
+        for fact in facts {
+            self.tree.insert(fact);
+        }
+        debug_assert_eq!(self.tree.root(), &proof.new_root);
+        Ok(proof)
+    }
+
+    /// Verify a consistency proof between two explicit roots.
+    pub fn verify_consistency(
+        proof: &ConsistencyProof,
+        old_root: &NodeHash,
+        new_root: &NodeHash,
+    ) -> Result<(), StoreError> {
+        Ok(proof.verify(old_root, new_root)?)
+    }
+
+    /// Verify a consistency proof between two retained epoch checkpoints.
+    pub fn verify_consistency_between_epochs(
+        &self,
+        proof: &ConsistencyProof,
+        from: EpochId,
+        to: EpochId,
+    ) -> Result<(), StoreError> {
+        let a = self
+            .checkpoint_at(from)
+            .ok_or(StoreError::UnknownEpoch(from))?;
+        let b = self.checkpoint_at(to).ok_or(StoreError::UnknownEpoch(to))?;
+        Ok(proof.verify_checkpoints(a, b)?)
     }
 }
 

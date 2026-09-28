@@ -8,13 +8,14 @@
 //! - prove-absent / prove-present: Single proofs
 //! - prove-absent-batch / verify-batch: Batch absence proofs
 //! - compact-encode / compact-decode: CompactProof hex
+//! - prove-consistency / verify-consistency: Append-only proofs between epochs
 //! - verify: Verify a proof against a root
 //! - keygen / sign-checkpoint / verify-checkpoint: Ed25519 signed checkpoints
 //! - attest-absent / verify-attestation: RootAttestation for verified proofs
 
 use absence::{
-    AbsenceStore, Checkpoint, CompactProof, FactId, MembershipProof, NonMembershipProof,
-    RootAttestation, SignedCheckpoint, SignerKey, VerifierKey,
+    AbsenceStore, Checkpoint, CompactProof, ConsistencyProof, FactId, MembershipProof,
+    NonMembershipProof, RootAttestation, SignedCheckpoint, SignerKey, VerifierKey,
 };
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
@@ -148,6 +149,39 @@ enum Commands {
         /// Treat as membership proof instead of absence
         #[arg(long)]
         membership: bool,
+    },
+
+    /// Prove epoch `--to` is an append-only extension of epoch `--from`
+    ProveConsistency {
+        /// Path to the store file
+        #[arg(short, long, default_value = "absence.store")]
+        store: PathBuf,
+
+        /// Older epoch
+        #[arg(long)]
+        from: u64,
+
+        /// Newer epoch
+        #[arg(long)]
+        to: u64,
+
+        /// Output file for the proof JSON (stdout if not specified)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+
+    /// Verify a consistency proof between two roots
+    VerifyConsistency {
+        /// Path to the consistency proof JSON
+        proof: PathBuf,
+
+        /// Expected old root (hex)
+        #[arg(long)]
+        old_root: String,
+
+        /// Expected new root (hex)
+        #[arg(long)]
+        new_root: String,
     },
 
     /// Verify a proof against a root hash
@@ -313,6 +347,17 @@ fn main() {
             file,
             membership,
         } => cmd_compact_decode(hex, file, membership),
+        Commands::ProveConsistency {
+            store,
+            from,
+            to,
+            output,
+        } => cmd_prove_consistency(&store, from, to, output),
+        Commands::VerifyConsistency {
+            proof,
+            old_root,
+            new_root,
+        } => cmd_verify_consistency(&proof, &old_root, &new_root),
         Commands::Verify {
             proof,
             root,
@@ -830,6 +875,82 @@ fn cmd_verify(proof_path: &PathBuf, root_hex: &str, epoch: Option<u64>, store_pa
                     std::process::exit(1);
                 }
             }
+        }
+    }
+}
+
+// ============= CONSISTENCY PROOF COMMANDS =============
+
+fn fail(msg: impl std::fmt::Display) -> ! {
+    eprintln!("Error: {}", msg);
+    std::process::exit(1);
+}
+
+fn cmd_prove_consistency(store_path: &PathBuf, from: u64, to: u64, output: Option<PathBuf>) {
+    let (store, store_file) = load_store(store_path);
+    let a = *store
+        .checkpoint_at(from)
+        .unwrap_or_else(|| fail(format!("unknown epoch {}", from)));
+    let b = *store
+        .checkpoint_at(to)
+        .unwrap_or_else(|| fail(format!("unknown epoch {}", to)));
+    if b.fact_count < a.fact_count || b.fact_count as usize > store_file.fact_ids.len() {
+        fail("checkpoint fact counts are inconsistent with the store file");
+    }
+
+    let parse = |ids: &[String]| -> Vec<FactId> {
+        ids.iter()
+            .map(|h| FactId::from_hex(h).unwrap_or_else(|_| fail("invalid fact id in store")))
+            .collect()
+    };
+    let prefix = parse(&store_file.fact_ids[..a.fact_count as usize]);
+    let added = parse(&store_file.fact_ids[a.fact_count as usize..b.fact_count as usize]);
+
+    let mut rebuilt = AbsenceStore::new();
+    for f in &prefix {
+        let _ = rebuilt.record(f);
+    }
+    if rebuilt.root() != &a.root {
+        fail(format!(
+            "store history does not reproduce epoch {} root",
+            from
+        ));
+    }
+    let proof = rebuilt
+        .record_batch_with_proof(&added)
+        .unwrap_or_else(|e| fail(e));
+    if let Err(e) = proof.verify_checkpoints(&a, &b) {
+        fail(format!(
+            "epoch {} is not an extension of epoch {}: {}",
+            to, from, e
+        ));
+    }
+
+    let json = serde_json::to_string_pretty(&proof).expect("serialize proof");
+    match output {
+        Some(path) => {
+            fs::write(&path, &json).expect("Failed to write proof");
+            println!("Consistency proof written to {}", path.display());
+            println!("Epochs: {} -> {} (+{} facts)", from, to, proof.len());
+            println!("Old root: {}", a.root_hex());
+            println!("New root: {}", b.root_hex());
+        }
+        None => println!("{}", json),
+    }
+}
+
+fn cmd_verify_consistency(proof_path: &PathBuf, old_hex: &str, new_hex: &str) {
+    let content = fs::read_to_string(proof_path).unwrap_or_else(|e| fail(e));
+    let proof: ConsistencyProof = serde_json::from_str(&content).unwrap_or_else(|e| fail(e));
+    let old_root = parse_root(old_hex);
+    let new_root = parse_root(new_hex);
+    match proof.verify(&old_root, &new_root) {
+        Ok(()) => {
+            println!("✓ VALID: append-only extension (+{} facts)", proof.len());
+        }
+        Err(e) => {
+            println!("✗ INVALID: {}", e);
+            std::process::exit(1);
         }
     }
 }

@@ -98,7 +98,7 @@ impl MembershipProof {
 /// that, when combined with an EMPTY leaf hash, produce the root.
 ///
 /// This is the PRIMARY feature of the Absence library.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NonMembershipProof {
     pub fact_id: [u8; 32],
     pub siblings: Vec<NodeHash>,
@@ -152,7 +152,7 @@ impl NonMembershipProof {
 }
 
 /// Compute root from a leaf hash and sibling path.
-fn compute_root_from_path(
+pub fn compute_root_from_path(
     fact_id: &FactId,
     leaf_hash: NodeHash,
     siblings: &[NodeHash],

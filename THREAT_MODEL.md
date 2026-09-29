@@ -154,12 +154,48 @@ If two different JSON values produce the same fact ID (SHA-256 collision):
 - Does NOT hide which facts were added (fact IDs are in the proof)
 - Verification requires O(n × depth) hash operations
 
+## Interval Absence Proofs (v0.5.0)
+
+### What Interval Absence Proofs Provide
+
+`IntervalAbsenceProof` demonstrates that a fact was continuously absent across a contiguous epoch range:
+
+- **Continuous absence**: The fact was not in the set at `from_epoch` AND was not added through `to_epoch`
+- **Temporal coverage**: Unlike a single-epoch proof, covers an entire time window
+- **Efficient verification**: Reuses consistency proof verification; O(n × depth) for n added facts
+
+### Security Properties
+
+- **Binding**: Cannot create a valid interval proof for a fact that was present or added
+- **Relies on consistency**: Inherits append-only guarantees from the underlying consistency proof
+- **Composability**: If absent [0,2] and [2,5] are valid, fact was absent [0,5] (requires verification)
+
+### Interval Absence Attack Vectors
+
+**Tampering with absence proof**: The initial absence proof at `from_epoch` must verify against that root.
+- Forging requires breaking SHA-256 collision resistance
+
+**Omitting added facts**: The consistency proof must include ALL facts added in the interval.
+- Omitting a fact (especially the queried fact) would cause root mismatch
+
+**Root substitution**: Claimed roots must match the actual checkpoint roots.
+- `verify_checkpoints()` validates epoch numbers and roots match
+
+### Limitations
+
+- **Epoch granularity only**: Does NOT prove temporal ordering within a single epoch. If multiple facts are added before a checkpoint, their relative order is not captured.
+- **Requires fact history**: Generating proofs requires the insertion-order history of facts (stored in `AbsenceStore.fact_history` or persisted in the store file).
+- **Does NOT prove non-existence before `from_epoch`**: The fact may have been present before the interval started.
+- **Proof size**: Includes full absence proof + consistency proof; O(depth + n × depth) for n added facts.
+- **Does NOT hide interval bounds or added facts**: Epoch range and added fact IDs are visible in the proof.
+
 ## Recommended Use Cases
 
 ✓ **Agent memory auditing**: Prove an agent never stored specific data
 ✓ **Negative credentials**: Prove absence of a ban/restriction
 ✓ **Audit logs**: Prove an action was never logged
 ✓ **Append-only verification**: Prove a log grew without deletions (v0.4.0)
+✓ **Continuous absence auditing**: Prove data was never stored during a time window (v0.5.0)
 ✓ **Research/prototyping**: Understand sparse Merkle trees
 
 ## NOT Recommended For

@@ -6,6 +6,7 @@ pub mod bundle;
 pub mod compact;
 pub mod consistency;
 pub mod fact_id;
+pub mod interval;
 pub mod keys;
 pub mod proof;
 pub mod signed;
@@ -16,6 +17,7 @@ pub use bundle::{BundleDecodeError, CompactBundle, WitnessBundle};
 pub use compact::{CompactError, CompactProof};
 pub use consistency::{ConsistencyError, ConsistencyProof};
 pub use fact_id::FactId;
+pub use interval::{IntervalAbsenceProof, IntervalError};
 pub use keys::{KeyError, SignerKey, VerifierKey};
 pub use proof::{MembershipProof, NonMembershipProof};
 pub use signed::{

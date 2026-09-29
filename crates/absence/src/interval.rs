@@ -31,7 +31,7 @@
 //!
 //! # Example
 //!
-//! ```ignore
+//! ```
 //! use absence::{AbsenceStore, FactId, IntervalAbsenceProof};
 //! use serde_json::json;
 //!

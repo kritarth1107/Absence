@@ -8,8 +8,10 @@
 //! - Epoch checkpoints for historical root pinning
 //! - Batch absence prove/verify
 //! - Append-only consistency proofs between roots / checkpoints
+//! - Interval absence proofs across epoch ranges (v0.5.0)
 
 use crate::consistency::{ConsistencyError, ConsistencyProof};
+use crate::interval::{IntervalAbsenceProof, IntervalError};
 use crate::keys::SignerKey;
 use crate::proof::{MembershipProof, NonMembershipProof, ProofError};
 use crate::signed::SignedCheckpoint;
@@ -67,8 +69,14 @@ pub enum StoreError {
     #[error("proof verification failed: {0}")]
     ProofError(#[from] ProofError),
 
+    #[error("interval absence proof failed: {0}")]
+    IntervalError(#[from] IntervalError),
+
     #[error("JSON error: {0}")]
     JsonError(#[from] serde_json::Error),
+
+    #[error("fact history not available (required for interval proofs)")]
+    NoFactHistory,
 }
 
 /// A commitment to the current state of the store.
@@ -116,6 +124,11 @@ pub struct AbsenceStore {
     tree: SparseMerkleTree,
     checkpoints: Vec<Checkpoint>,
     signed_checkpoints: Vec<SignedCheckpoint>,
+    /// Fact IDs in insertion order (required for interval proofs).
+    /// Populated when facts are recorded via record()/record_json()/record_value(),
+    /// or restored via set_fact_history(). If empty but tree is not, interval
+    /// proofs will return NoFactHistory error.
+    fact_history: Vec<FactId>,
 }
 
 impl Default for AbsenceStore {
@@ -131,6 +144,7 @@ impl AbsenceStore {
             tree: SparseMerkleTree::new(),
             checkpoints: Vec::new(),
             signed_checkpoints: Vec::new(),
+            fact_history: Vec::new(),
         }
     }
 
@@ -256,6 +270,7 @@ impl AbsenceStore {
         if !self.tree.insert(fact_id) {
             return Err(StoreError::AlreadyRecorded);
         }
+        self.fact_history.push(*fact_id);
         Ok(())
     }
 
@@ -417,6 +432,150 @@ impl AbsenceStore {
             .ok_or(StoreError::UnknownEpoch(from))?;
         let b = self.checkpoint_at(to).ok_or(StoreError::UnknownEpoch(to))?;
         Ok(proof.verify_checkpoints(a, b)?)
+    }
+
+    // ============= INTERVAL ABSENCE PROOFS (v0.5.0) =============
+
+    /// Get the fact history (facts in insertion order).
+    ///
+    /// Returns the list of fact IDs in the order they were recorded.
+    /// Required for interval absence proofs.
+    pub fn fact_history(&self) -> &[FactId] {
+        &self.fact_history
+    }
+
+    /// Set the fact history (for restoring from persistence).
+    ///
+    /// The caller must ensure the history matches the tree state and
+    /// checkpoint fact_counts.
+    pub fn set_fact_history(&mut self, history: Vec<FactId>) {
+        self.fact_history = history;
+    }
+
+    /// Prove a fact was continuously absent across an epoch range.
+    ///
+    /// Generates an [`IntervalAbsenceProof`] showing the fact was absent at
+    /// `from_epoch` and was never added through `to_epoch`.
+    ///
+    /// Requires:
+    /// - Checkpoints at both epochs exist
+    /// - Fact history is available (facts recorded via this store, or restored
+    ///   via [`set_fact_history`])
+    /// - The fact is absent at `from_epoch` (not present in the tree at that point)
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use absence::{AbsenceStore, FactId};
+    /// use serde_json::json;
+    ///
+    /// let mut store = AbsenceStore::new();
+    /// store.record_json(&json!({"user": "alice"})).unwrap();
+    /// store.checkpoint(); // epoch 0
+    ///
+    /// store.record_json(&json!({"user": "bob"})).unwrap();
+    /// store.checkpoint(); // epoch 1
+    ///
+    /// // Prove "eve" was absent throughout epochs 0-1
+    /// let eve = FactId::from_json_value(&json!({"user": "eve"}));
+    /// let proof = store.prove_absent_interval(&eve, 0, 1).unwrap();
+    ///
+    /// // Verify continuous absence
+    /// let cp0 = store.checkpoint_at(0).unwrap();
+    /// let cp1 = store.checkpoint_at(1).unwrap();
+    /// proof.verify_checkpoints(cp0, cp1).unwrap();
+    /// ```
+    pub fn prove_absent_interval(
+        &self,
+        fact_id: &FactId,
+        from_epoch: EpochId,
+        to_epoch: EpochId,
+    ) -> Result<IntervalAbsenceProof, StoreError> {
+        let from_cp = self
+            .checkpoint_at(from_epoch)
+            .ok_or(StoreError::UnknownEpoch(from_epoch))?;
+        let to_cp = self
+            .checkpoint_at(to_epoch)
+            .ok_or(StoreError::UnknownEpoch(to_epoch))?;
+
+        if from_cp.epoch > to_cp.epoch {
+            return Err(StoreError::IntervalError(
+                IntervalError::InvalidEpochRange {
+                    from: from_cp.epoch,
+                    to: to_cp.epoch,
+                },
+            ));
+        }
+
+        if self.fact_history.is_empty() && !self.tree.is_empty() {
+            return Err(StoreError::NoFactHistory);
+        }
+
+        let from_count = from_cp.fact_count as usize;
+        let to_count = to_cp.fact_count as usize;
+
+        if to_count > self.fact_history.len() {
+            return Err(StoreError::NoFactHistory);
+        }
+
+        let prefix_facts = &self.fact_history[..from_count];
+        let added_facts = &self.fact_history[from_count..to_count];
+
+        let mut tree_at_from = SparseMerkleTree::new();
+        for f in prefix_facts {
+            tree_at_from.insert(f);
+        }
+
+        if tree_at_from.root() != &from_cp.root {
+            return Err(StoreError::Consistency(ConsistencyError::OldRootMismatch));
+        }
+
+        let absence_at_from = NonMembershipProof::generate(&tree_at_from, fact_id)
+            .ok_or(StoreError::IntervalError(IntervalError::PresentAtStart))?;
+
+        let added_vec: Vec<FactId> = added_facts.to_vec();
+        let consistency = ConsistencyProof::generate(&tree_at_from, &added_vec)?;
+
+        let proof =
+            IntervalAbsenceProof::new(fact_id, from_cp, to_cp, absence_at_from, consistency)?;
+
+        Ok(proof)
+    }
+
+    /// Prove a JSON fact was continuously absent across an epoch range.
+    pub fn prove_absent_interval_json(
+        &self,
+        value: &serde_json::Value,
+        from_epoch: EpochId,
+        to_epoch: EpochId,
+    ) -> Result<IntervalAbsenceProof, StoreError> {
+        let fact_id = FactId::from_json_value(value);
+        self.prove_absent_interval(&fact_id, from_epoch, to_epoch)
+    }
+
+    /// Verify an interval absence proof between two epoch checkpoints.
+    pub fn verify_interval_absence_between_epochs(
+        &self,
+        proof: &IntervalAbsenceProof,
+        from_epoch: EpochId,
+        to_epoch: EpochId,
+    ) -> Result<(), StoreError> {
+        let from_cp = self
+            .checkpoint_at(from_epoch)
+            .ok_or(StoreError::UnknownEpoch(from_epoch))?;
+        let to_cp = self
+            .checkpoint_at(to_epoch)
+            .ok_or(StoreError::UnknownEpoch(to_epoch))?;
+        Ok(proof.verify_checkpoints(from_cp, to_cp)?)
+    }
+
+    /// Verify an interval absence proof against explicit checkpoints.
+    pub fn verify_interval_absence(
+        proof: &IntervalAbsenceProof,
+        from_checkpoint: &Checkpoint,
+        to_checkpoint: &Checkpoint,
+    ) -> Result<(), IntervalError> {
+        proof.verify_checkpoints(from_checkpoint, to_checkpoint)
     }
 }
 

@@ -33,3 +33,7 @@ path = "../../examples/signed_checkpoint.rs"
 [[example]]
 name = "consistency"
 path = "../../examples/consistency.rs"
+
+[[example]]
+name = "interval_absence"
+path = "../../examples/interval_absence.rs"

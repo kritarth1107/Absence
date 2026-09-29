@@ -9,13 +9,14 @@
 //! - prove-absent-batch / verify-batch: Batch absence proofs
 //! - compact-encode / compact-decode: CompactProof hex
 //! - prove-consistency / verify-consistency: Append-only proofs between epochs
+//! - prove-interval / verify-interval: Interval absence proofs across epoch ranges
 //! - verify: Verify a proof against a root
 //! - keygen / sign-checkpoint / verify-checkpoint: Ed25519 signed checkpoints
 //! - attest-absent / verify-attestation: RootAttestation for verified proofs
 
 use absence::{
-    AbsenceStore, Checkpoint, CompactProof, ConsistencyProof, FactId, MembershipProof,
-    NonMembershipProof, RootAttestation, SignedCheckpoint, SignerKey, VerifierKey,
+    AbsenceStore, Checkpoint, CompactProof, ConsistencyProof, FactId, IntervalAbsenceProof,
+    MembershipProof, NonMembershipProof, RootAttestation, SignedCheckpoint, SignerKey, VerifierKey,
 };
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
@@ -270,6 +271,47 @@ enum Commands {
         #[arg(short, long)]
         pubkey: String,
     },
+
+    // ============= INTERVAL ABSENCE PROOFS (v0.5.0) =============
+    /// Prove a fact was continuously absent across an epoch range
+    ProveInterval {
+        /// Path to the store file
+        #[arg(short, long, default_value = "absence.store")]
+        store: PathBuf,
+
+        /// Starting epoch (inclusive)
+        #[arg(long)]
+        from: u64,
+
+        /// Ending epoch (inclusive)
+        #[arg(long)]
+        to: u64,
+
+        /// JSON value to prove absent throughout the interval
+        json: String,
+
+        /// Output file for the interval proof JSON (stdout if not specified)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+
+    /// Verify an interval absence proof
+    VerifyInterval {
+        /// Path to the interval proof JSON file
+        proof: PathBuf,
+
+        /// Expected old root at from_epoch (hex; optional if --store provided)
+        #[arg(long)]
+        old_root: Option<String>,
+
+        /// Expected new root at to_epoch (hex; optional if --store provided)
+        #[arg(long)]
+        new_root: Option<String>,
+
+        /// Store file to look up checkpoint roots (alternative to --old-root/--new-root)
+        #[arg(short, long)]
+        store: Option<PathBuf>,
+    },
 }
 
 /// Serializable store format (facts + checkpoint history)
@@ -383,6 +425,19 @@ fn main() {
             attestation,
             pubkey,
         } => cmd_verify_attestation(&attestation, &pubkey),
+        Commands::ProveInterval {
+            store,
+            from,
+            to,
+            json,
+            output,
+        } => cmd_prove_interval(&store, from, to, &json, output),
+        Commands::VerifyInterval {
+            proof,
+            old_root,
+            new_root,
+            store,
+        } => cmd_verify_interval(&proof, old_root, new_root, store),
     }
 }
 
@@ -1125,6 +1180,95 @@ fn cmd_verify_attestation(attestation_path: &PathBuf, pubkey_hex: &str) {
         }
         Err(e) => {
             eprintln!("✗ Attestation INVALID: {}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
+// ============= INTERVAL ABSENCE PROOFS (v0.5.0) =============
+
+fn cmd_prove_interval(
+    store_path: &PathBuf,
+    from: u64,
+    to: u64,
+    json: &str,
+    output: Option<PathBuf>,
+) {
+    let (store, _) = load_store(store_path);
+
+    let value: serde_json::Value = match serde_json::from_str(json) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("Error parsing JSON: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    let fact_id = FactId::from_json_value(&value);
+
+    let proof = match store.prove_absent_interval(&fact_id, from, to) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    let json_out = serde_json::to_string_pretty(&proof).expect("serialize proof");
+
+    match output {
+        Some(path) => {
+            fs::write(&path, &json_out).expect("Failed to write interval proof");
+            println!("Interval absence proof written to {}", path.display());
+            println!("Fact ID: {}", fact_id.to_hex());
+            println!("Epochs: {} -> {}", from, to);
+            println!("Facts added during interval: {}", proof.facts_added_count());
+            println!("From root: {}", hex::encode(proof.from_root));
+            println!("To root: {}", hex::encode(proof.to_root));
+        }
+        None => println!("{}", json_out),
+    }
+}
+
+fn cmd_verify_interval(
+    proof_path: &PathBuf,
+    old_root_hex: Option<String>,
+    new_root_hex: Option<String>,
+    store_path: Option<PathBuf>,
+) {
+    let content = fs::read_to_string(proof_path).unwrap_or_else(|e| fail(e));
+    let proof: IntervalAbsenceProof = serde_json::from_str(&content).unwrap_or_else(|e| fail(e));
+
+    let (from_root, to_root) = match (old_root_hex, new_root_hex, store_path) {
+        (Some(old), Some(new), _) => (parse_root(&old), parse_root(&new)),
+        (None, None, Some(sp)) => {
+            let (store, _) = load_store(&sp);
+            let from_cp = store
+                .checkpoint_at(proof.from_epoch)
+                .unwrap_or_else(|| fail(format!("unknown epoch {}", proof.from_epoch)));
+            let to_cp = store
+                .checkpoint_at(proof.to_epoch)
+                .unwrap_or_else(|| fail(format!("unknown epoch {}", proof.to_epoch)));
+            (from_cp.root, to_cp.root)
+        }
+        _ => {
+            eprintln!("Error: provide --old-root and --new-root, or --store");
+            std::process::exit(1);
+        }
+    };
+
+    match proof.verify(&from_root, &to_root) {
+        Ok(()) => {
+            let fact_id = FactId::from_bytes(proof.fact_id);
+            println!("✓ VALID: fact {} was continuously absent", fact_id.to_hex());
+            println!("  Epochs: {} -> {}", proof.from_epoch, proof.to_epoch);
+            println!(
+                "  Facts added during interval: {}",
+                proof.facts_added_count()
+            );
+        }
+        Err(e) => {
+            eprintln!("✗ INVALID: {}", e);
             std::process::exit(1);
         }
     }

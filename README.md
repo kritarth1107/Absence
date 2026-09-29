@@ -12,6 +12,7 @@ Absence provides cryptographic proofs that a key/fact is NOT in a committed set,
 - **Non-membership (absence) proofs** — prove a fact was never recorded (PRIMARY)
 - **Membership proofs** — prove a fact was recorded (secondary)
 - **Epoch checkpoints** — pin historical roots (`Checkpoint`) and verify absence at an epoch
+- **Interval absence proofs** (v0.5.0) — prove continuous absence across epoch ranges
 - **Append-only consistency proofs** (v0.4.0) — prove newer root = older root + additions only
 - **Signed checkpoints** (v0.3.0) — Ed25519 signatures over checkpoints for trustless verification
 - **Root attestations** (v0.3.0) — bind proofs to signed checkpoints for full verification
@@ -108,6 +109,33 @@ proof.verify_checkpoints(&cp0, &cp1).unwrap();
 println!("epoch 1 = epoch 0 + {} new facts", proof.len());
 ```
 
+### Interval absence proofs (v0.5.0)
+
+```rust
+use absence::{AbsenceStore, FactId};
+use serde_json::json;
+
+let mut store = AbsenceStore::new();
+
+// Day 1: record facts and checkpoint
+store.record_json(&json!({"agent": "planner", "memory": "user prefers metric"})).unwrap();
+store.checkpoint(); // epoch 0
+
+// Day 2: more facts
+store.record_json(&json!({"agent": "planner", "memory": "project deadline Sep 30"})).unwrap();
+store.checkpoint(); // epoch 1
+
+// Prove a sensitive fact was NEVER recorded throughout epochs 0-1
+let sensitive = FactId::from_json_value(&json!({"agent": "planner", "memory": "user password"}));
+let proof = store.prove_absent_interval(&sensitive, 0, 1).unwrap();
+
+// Verifier confirms continuous absence across the epoch range
+let cp0 = store.checkpoint_at(0).unwrap();
+let cp1 = store.checkpoint_at(1).unwrap();
+proof.verify_checkpoints(cp0, cp1).unwrap();
+println!("Fact was absent throughout epochs 0-1 ({} facts added)", proof.facts_added_count());
+```
+
 ### Signed checkpoints (v0.3.0)
 
 ```rust
@@ -175,6 +203,17 @@ absence prove-consistency --from 0 --to 1 -o consistency.json
 # Verify a consistency proof
 absence verify-consistency consistency.json --old-root <old-hex> --new-root <new-hex>
 
+# === Interval absence proofs (v0.5.0) ===
+
+# Prove a fact was continuously absent across epochs 0-2
+absence prove-interval --from 0 --to 2 '{"sensitive": "data"}' -o interval.json
+
+# Verify using stored checkpoints
+absence verify-interval interval.json --store absence.store
+
+# Or verify with explicit roots
+absence verify-interval interval.json --old-root <from-hex> --new-root <to-hex>
+
 # === Signed checkpoints (v0.3.0) ===
 
 # Generate a signing keypair
@@ -194,7 +233,7 @@ absence attest-absent '{"user": "eve"}' -k my.key -o attestation.json
 absence verify-attestation attestation.json --pubkey abc123...
 ```
 
-## Scope & Limitations (v0.4.0)
+## Scope & Limitations (v0.5.0)
 
 | Aspect | Status | Notes |
 |--------|--------|-------|
@@ -202,6 +241,7 @@ absence verify-attestation attestation.json --pubkey abc123...
 | Cryptographic security | **Commitment + opening** | Standard Merkle proofs, NOT zero-knowledge |
 | Signed checkpoints | **Ed25519** | Verifiers trust root without trusting store operator |
 | Consistency proofs | **Append-only** | Prove newer root = older root + additions (v0.4.0) |
+| Interval absence | **Continuous** | Prove fact absent throughout epoch range (v0.5.0) |
 | Privacy | **Limited** | Proves absence without revealing set contents, but proof size reveals nothing extra |
 | ZK-SNARK | **No** | Not a zero-knowledge proof system |
 | RSA accumulator | **No** | Uses Merkle tree, not accumulator-based |
@@ -236,6 +276,8 @@ absence verify-attestation attestation.json --pubkey abc123...
 
 9. **Consistency proof** (v0.4.0): `ConsistencyProof` links an older root to a newer root via a sequence of absence proofs — one per added fact. Each step proves the fact was absent, then recomputes the root with that leaf present. If the final root matches the expected new root, the new tree is exactly `old ∪ added`, guaranteeing the log is append-only.
 
+10. **Interval absence proof** (v0.5.0): `IntervalAbsenceProof` proves a fact was continuously absent across an epoch range `[from, to]`. It combines: (1) an absence proof at `from_epoch`, (2) a consistency proof from `from_epoch` to `to_epoch`, and (3) verification that the fact ID is not among the added facts. If all three hold, the fact was absent at the start and never added, so it remained absent throughout.
+
 ## Project Structure
 
 ```
@@ -245,14 +287,15 @@ crates/
       fact_id.rs    # Content-addressed fact IDs
       smt.rs        # Sparse Merkle Tree
       proof.rs      # Membership & non-membership proofs
-      store.rs      # High-level AbsenceStore API (+ epochs, batch, signed, consistency)
+      store.rs      # High-level AbsenceStore API (+ epochs, batch, signed, consistency, interval)
       compact.rs    # CompactProof binary/hex encoding
       keys.rs       # Ed25519 SignerKey / VerifierKey (v0.3.0)
       signed.rs     # SignedCheckpoint, RootAttestation (v0.3.0)
       bundle.rs     # WitnessBundle (v0.3.0)
       consistency.rs # ConsistencyProof for append-only verification (v0.4.0)
+      interval.rs   # IntervalAbsenceProof for continuous absence (v0.5.0)
   absence-cli/      # CLI binary
-examples/           # Usage examples (basic, epoch_batch, signed_checkpoint, consistency)
+examples/           # Usage examples (basic, epoch_batch, signed_checkpoint, consistency, interval_absence)
 ```
 
 ## Related Work

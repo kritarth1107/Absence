@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-09-29
+
+### Added
+
+- **Interval absence proofs** — prove continuous absence across epoch ranges
+  - `IntervalAbsenceProof`: combines absence proof at start epoch with consistency proof showing fact was never added
+  - `IntervalError`: errors for generation and verification failures
+  - Design: absence at from_epoch + consistency from→to + fact not in added set = continuous absence
+  - `verify_self()`: verify internal consistency
+  - `verify()`: verify against two explicit roots
+  - `verify_checkpoints()`: verify against two checkpoints with epoch validation
+
+- **AbsenceStore interval integration**
+  - `prove_absent_interval(fact_id, from_epoch, to_epoch)`: generate interval absence proof
+  - `prove_absent_interval_json()`: JSON variant
+  - `verify_interval_absence_between_epochs()`: verify against stored checkpoints
+  - `verify_interval_absence()`: static verification against explicit checkpoints
+  - `fact_history()` / `set_fact_history()`: fact insertion order tracking for proof generation
+
+- **CLI commands** (v0.5.0)
+  - `prove-interval --from <epoch> --to <epoch> '<json>' [-o file]`: generate interval absence proof
+  - `verify-interval <proof.json> [--old-root <hex> --new-root <hex> | --store file]`: verify interval proof
+
+- **Examples**
+  - `interval_absence.rs`: demonstrate continuous absence proofs across epochs
+
+### Security
+
+- Interval absence proofs combine single-epoch absence with consistency to prove continuous absence
+- Relies on consistency proof security: if store is append-only, absence at start + not-in-added-set = absent throughout
+- See THREAT_MODEL.md for limitations: does NOT prove temporal ordering of fact additions within an epoch
+- Still a **toy/research** implementation — NOT audited
+
 ## [0.4.0] - 2026-09-28
 
 ### Added
@@ -162,6 +195,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - NOT zero-knowledge (standard Merkle proofs)
 - NOT audited
 
+[0.5.0]: https://github.com/kritarth1107/Absence/releases/tag/v0.5.0
 [0.4.0]: https://github.com/kritarth1107/Absence/releases/tag/v0.4.0
 [0.3.0]: https://github.com/kritarth1107/Absence/releases/tag/v0.3.0
 [0.2.0]: https://github.com/kritarth1107/Absence/releases/tag/v0.2.0

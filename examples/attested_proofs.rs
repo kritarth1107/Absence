@@ -43,7 +43,11 @@ fn main() {
     let _signed_cp2 = store.checkpoint_signed(&signer);
     println!("Day 3: Recorded memory, signed checkpoint (epoch 2)");
 
-    println!("\nStore has {} facts across {} epochs\n", store.len(), store.checkpoints().len());
+    println!(
+        "\nStore has {} facts across {} epochs\n",
+        store.len(),
+        store.checkpoints().len()
+    );
 
     // ============= ATTESTED CONSISTENCY PROOF =============
     println!("--- AttestedConsistency: Prove append-only advancement ---\n");
@@ -52,11 +56,23 @@ fn main() {
     let attested_consistency = store.attest_consistency(0, 2, &signer).unwrap();
 
     println!("Created attested consistency proof:");
-    println!("  From epoch: {}", attested_consistency.old_checkpoint().epoch);
-    println!("  To epoch: {}", attested_consistency.new_checkpoint().epoch);
+    println!(
+        "  From epoch: {}",
+        attested_consistency.old_checkpoint().epoch
+    );
+    println!(
+        "  To epoch: {}",
+        attested_consistency.new_checkpoint().epoch
+    );
     println!("  Facts added: {}", attested_consistency.facts_added());
-    println!("  Old root: {}", attested_consistency.old_checkpoint().root_hex());
-    println!("  New root: {}", attested_consistency.new_checkpoint().root_hex());
+    println!(
+        "  Old root: {}",
+        attested_consistency.old_checkpoint().root_hex()
+    );
+    println!(
+        "  New root: {}",
+        attested_consistency.new_checkpoint().root_hex()
+    );
     println!();
 
     // A verifier with only the public key can verify both:
@@ -69,23 +85,33 @@ fn main() {
 
     // Show JSON format (portable)
     let json_str = serde_json::to_string_pretty(&attested_consistency).unwrap();
-    println!("\nJSON proof (first 500 chars):\n{}...\n", &json_str[..json_str.len().min(500)]);
+    println!(
+        "\nJSON proof (first 500 chars):\n{}...\n",
+        &json_str[..json_str.len().min(500)]
+    );
 
     // ============= ATTESTED INTERVAL PROOF =============
     println!("--- AttestedInterval: Prove continuous absence ---\n");
 
     // Prove that a sensitive fact was NEVER recorded throughout epochs 0-2
-    let sensitive = FactId::from_json_value(&json!({"agent": "planner", "memory": "user password"}));
+    let sensitive =
+        FactId::from_json_value(&json!({"agent": "planner", "memory": "user password"}));
     let attested_interval = store
         .attest_interval_absent(&sensitive, 0, 2, &signer)
         .unwrap();
 
     println!("Created attested interval absence proof:");
     println!("  Fact ID: {}", sensitive.to_hex());
-    println!("  From epoch: {}", attested_interval.from_checkpoint().epoch);
+    println!(
+        "  From epoch: {}",
+        attested_interval.from_checkpoint().epoch
+    );
     println!("  To epoch: {}", attested_interval.to_checkpoint().epoch);
     println!("  Epoch span: {}", attested_interval.epoch_span());
-    println!("  Facts added during interval: {}", attested_interval.facts_added_count());
+    println!(
+        "  Facts added during interval: {}",
+        attested_interval.facts_added_count()
+    );
     println!();
 
     // A verifier with only the public key can verify both:

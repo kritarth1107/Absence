@@ -1392,7 +1392,12 @@ fn cmd_attest_consistency(
         Some(path) => {
             fs::write(&path, &json_out).expect("Failed to write attested proof");
             println!("Attested consistency proof written to {}", path.display());
-            println!("Epochs: {} -> {} (+{} facts)", from, to, attested.facts_added());
+            println!(
+                "Epochs: {} -> {} (+{} facts)",
+                from,
+                to,
+                attested.facts_added()
+            );
             println!("Old root: {}", attested.old_checkpoint().root_hex());
             println!("New root: {}", attested.new_checkpoint().root_hex());
             println!("Public key: {}", attested.old_signed.signer_public_key);
@@ -1403,8 +1408,7 @@ fn cmd_attest_consistency(
 
 fn cmd_verify_attested_consistency(proof_path: &PathBuf, pubkey_hex: &str) {
     let content = fs::read_to_string(proof_path).unwrap_or_else(|e| fail(e));
-    let attested: AttestedConsistency =
-        serde_json::from_str(&content).unwrap_or_else(|e| fail(e));
+    let attested: AttestedConsistency = serde_json::from_str(&content).unwrap_or_else(|e| fail(e));
 
     let verifier = VerifierKey::from_hex(pubkey_hex).expect("Invalid public key");
 

@@ -441,10 +441,8 @@ impl AttestedConsistency {
             return Err(SignedError::SignerMismatch);
         }
 
-        self.consistency_proof.verify_checkpoints(
-            &self.old_signed.checkpoint,
-            &self.new_signed.checkpoint,
-        )?;
+        self.consistency_proof
+            .verify_checkpoints(&self.old_signed.checkpoint, &self.new_signed.checkpoint)?;
 
         Ok(())
     }
@@ -579,10 +577,8 @@ impl AttestedInterval {
             return Err(SignedError::SignerMismatch);
         }
 
-        self.interval_proof.verify_checkpoints(
-            &self.from_signed.checkpoint,
-            &self.to_signed.checkpoint,
-        )?;
+        self.interval_proof
+            .verify_checkpoints(&self.from_signed.checkpoint, &self.to_signed.checkpoint)?;
 
         Ok(())
     }

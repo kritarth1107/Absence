@@ -189,6 +189,49 @@ If two different JSON values produce the same fact ID (SHA-256 collision):
 - **Proof size**: Includes full absence proof + consistency proof; O(depth + n × depth) for n added facts.
 - **Does NOT hide interval bounds or added facts**: Epoch range and added fact IDs are visible in the proof.
 
+## Attested Proofs (v0.6.0)
+
+### What Attested Proofs Provide
+
+`AttestedConsistency` and `AttestedInterval` bind proofs to Ed25519-signed checkpoint pairs:
+
+- **Signature binding**: Both endpoints (old/from and new/to checkpoints) are signed
+- **Single-key verification**: Verifiers need only the signer's public key
+- **No store access required**: All verification data is in the portable JSON proof
+- **Combined verification**: Checks signatures AND underlying proof validity in one call
+
+### Security Properties
+
+- **Inherits proof security**: All guarantees from ConsistencyProof/IntervalAbsenceProof apply
+- **Inherits signature security**: All guarantees from SignedCheckpoint apply
+- **Signer consistency**: Both checkpoints must be signed by the same key
+- **Binding**: Cannot create valid attested proof without both valid signatures and valid underlying proof
+
+### Attested Proof Attack Vectors
+
+**Key compromise**: If the signing key is compromised, attacker can sign arbitrary checkpoints.
+- Mitigation: Same as SignedCheckpoint — secure key storage, rotation, HSMs
+
+**Mixed signers**: Attempting to combine checkpoints from different signers.
+- Detection: `verify()` checks `signer_public_key` matches on both checkpoints
+- Returns `SignedError::SignerMismatch` if different keys detected
+
+**Tampered checkpoint**: Modifying a checkpoint after signing.
+- Detection: Signature verification fails for the tampered checkpoint
+
+**Tampered proof**: Modifying the underlying ConsistencyProof or IntervalAbsenceProof.
+- Detection: Proof verification against the signed roots fails
+
+**Swapped checkpoints**: Using old checkpoint as new and vice versa.
+- Detection: Underlying proof verification fails (wrong epoch order, root mismatch)
+
+### Limitations
+
+- **Does NOT provide non-repudiation**: Signer can claim key compromise
+- **Does NOT hide proof contents**: Same as underlying proofs — epoch range, fact IDs visible
+- **Proof size**: Sum of two SignedCheckpoints + underlying proof
+- **No key rotation support**: Each attested proof is bound to a single key pair
+
 ## Recommended Use Cases
 
 ✓ **Agent memory auditing**: Prove an agent never stored specific data
@@ -196,6 +239,8 @@ If two different JSON values produce the same fact ID (SHA-256 collision):
 ✓ **Audit logs**: Prove an action was never logged
 ✓ **Append-only verification**: Prove a log grew without deletions (v0.4.0)
 ✓ **Continuous absence auditing**: Prove data was never stored during a time window (v0.5.0)
+✓ **Cross-system verification**: Share attested proofs between services (v0.6.0)
+✓ **Offline verification**: Verify proofs without access to the original store (v0.6.0)
 ✓ **Research/prototyping**: Understand sparse Merkle trees
 
 ## NOT Recommended For

@@ -21,7 +21,8 @@ pub use interval::{IntervalAbsenceProof, IntervalError};
 pub use keys::{KeyError, SignerKey, VerifierKey};
 pub use proof::{MembershipProof, NonMembershipProof};
 pub use signed::{
-    sign_checkpoint, verify_attested_absent, verify_attested_present, verify_signed_checkpoint,
+    sign_checkpoint, verify_attested_absent, verify_attested_consistency, verify_attested_interval,
+    verify_attested_present, verify_signed_checkpoint, AttestedConsistency, AttestedInterval,
     RootAttestation, SignedCheckpoint, SignedError, SIGNED_CHECKPOINT_DOMAIN,
 };
 pub use smt::SparseMerkleTree;

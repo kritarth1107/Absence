@@ -5,6 +5,50 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-09-30
+
+### Added
+
+- **Attested consistency proofs** — bind ConsistencyProof to Ed25519-signed checkpoint pairs
+  - `AttestedConsistency`: wraps ConsistencyProof with SignedCheckpoint at both epochs
+  - Verifiers only need the signer's public key (no store access required)
+  - `verify()`: checks both signatures and consistency proof validity
+  - `verify_self_consistent()`: checks internal consistency (extracts embedded pubkey)
+  - Full serde support for portable JSON transport
+
+- **Attested interval absence proofs** — bind IntervalAbsenceProof to signed checkpoint pairs
+  - `AttestedInterval`: wraps IntervalAbsenceProof with SignedCheckpoint at both epochs
+  - Proves continuous absence across epoch ranges with cryptographic attestation
+  - Same verification API as AttestedConsistency
+  - Full serde support for portable JSON transport
+
+- **AbsenceStore attested integration**
+  - `attest_consistency(from_epoch, to_epoch, signer)`: generate AttestedConsistency
+  - `attest_interval_absent(fact_id, from_epoch, to_epoch, signer)`: generate AttestedInterval
+  - `attest_interval_absent_json()`: JSON variant
+
+- **CLI commands** (v0.6.0)
+  - `attest-consistency --from <epoch> --to <epoch> -k <key> [-o file]`: create attested consistency proof
+  - `verify-attested-consistency <proof.json> --pubkey <hex>`: verify attested consistency
+  - `attest-interval --from <epoch> --to <epoch> '<json>' -k <key> [-o file]`: create attested interval proof
+  - `verify-attested-interval <proof.json> --pubkey <hex>`: verify attested interval
+
+- **Examples**
+  - `attested_proofs.rs`: demonstrate AttestedConsistency and AttestedInterval workflows
+
+- **New SignedError variants**
+  - `ConsistencyInvalid`: wraps ConsistencyError for attested proof failures
+  - `IntervalInvalid`: wraps IntervalError for attested proof failures
+  - `OldCheckpointMismatch` / `NewCheckpointMismatch`: checkpoint mismatch errors
+  - `SignerMismatch`: detected when checkpoints were signed by different keys
+
+### Security
+
+- Attested proofs inherit security properties from both signed checkpoints and underlying proofs
+- Signer mismatch detection prevents mixing checkpoints from different signers
+- See THREAT_MODEL.md for attested proof security analysis
+- Still a **toy/research** implementation — NOT audited
+
 ## [0.5.0] - 2026-09-29
 
 ### Added
@@ -195,6 +239,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - NOT zero-knowledge (standard Merkle proofs)
 - NOT audited
 
+[0.6.0]: https://github.com/kritarth1107/Absence/releases/tag/v0.6.0
 [0.5.0]: https://github.com/kritarth1107/Absence/releases/tag/v0.5.0
 [0.4.0]: https://github.com/kritarth1107/Absence/releases/tag/v0.4.0
 [0.3.0]: https://github.com/kritarth1107/Absence/releases/tag/v0.3.0

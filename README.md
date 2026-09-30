@@ -12,6 +12,8 @@ Absence provides cryptographic proofs that a key/fact is NOT in a committed set,
 - **Non-membership (absence) proofs** — prove a fact was never recorded (PRIMARY)
 - **Membership proofs** — prove a fact was recorded (secondary)
 - **Epoch checkpoints** — pin historical roots (`Checkpoint`) and verify absence at an epoch
+- **Attested consistency proofs** (v0.6.0) — bind ConsistencyProof to signed checkpoint pairs
+- **Attested interval proofs** (v0.6.0) — bind IntervalAbsenceProof to signed checkpoint pairs
 - **Interval absence proofs** (v0.5.0) — prove continuous absence across epoch ranges
 - **Append-only consistency proofs** (v0.4.0) — prove newer root = older root + additions only
 - **Signed checkpoints** (v0.3.0) — Ed25519 signatures over checkpoints for trustless verification
@@ -163,6 +165,38 @@ let attestation = RootAttestation::attest_absent(&proof, &signed.checkpoint, &si
 assert!(attestation.verify_absent(&verifier).is_ok());
 ```
 
+### Attested proofs (v0.6.0)
+
+```rust
+use absence::{AbsenceStore, SignerKey, FactId};
+use serde_json::json;
+
+let mut store = AbsenceStore::new();
+let signer = SignerKey::generate();
+let verifier = signer.verifier();
+
+// Day 1: record facts and sign checkpoint
+store.record_json(&json!({"day": 1})).unwrap();
+store.checkpoint_signed(&signer);
+
+// Day 2: more facts and another signed checkpoint
+store.record_json(&json!({"day": 2})).unwrap();
+store.checkpoint_signed(&signer);
+
+// === AttestedConsistency ===
+// Prove the log grew append-only, bound to signed checkpoints
+let attested_consistency = store.attest_consistency(0, 1, &signer).unwrap();
+assert!(attested_consistency.verify(&verifier).is_ok());
+println!("Verified: {} facts added", attested_consistency.facts_added());
+
+// === AttestedInterval ===
+// Prove a fact was continuously absent, bound to signed checkpoints
+let sensitive = FactId::from_json_value(&json!({"secret": "password"}));
+let attested_interval = store.attest_interval_absent(&sensitive, 0, 1, &signer).unwrap();
+assert!(attested_interval.verify(&verifier).is_ok());
+println!("Verified: fact was absent throughout epochs 0-1");
+```
+
 ### CLI Usage
 
 ```bash
@@ -231,15 +265,30 @@ absence attest-absent '{"user": "eve"}' -k my.key -o attestation.json
 
 # Verify an attestation
 absence verify-attestation attestation.json --pubkey abc123...
+
+# === Attested proofs (v0.6.0) ===
+
+# Create attested consistency proof (append-only with signatures)
+absence attest-consistency --from 0 --to 1 -k my.key -o attested_consistency.json
+
+# Verify attested consistency proof
+absence verify-attested-consistency attested_consistency.json --pubkey abc123...
+
+# Create attested interval absence proof (continuous absence with signatures)
+absence attest-interval --from 0 --to 2 '{"sensitive": "data"}' -k my.key -o attested_interval.json
+
+# Verify attested interval proof
+absence verify-attested-interval attested_interval.json --pubkey abc123...
 ```
 
-## Scope & Limitations (v0.5.0)
+## Scope & Limitations (v0.6.0)
 
 | Aspect | Status | Notes |
 |--------|--------|-------|
 | Scale | **Toy** | Tested with ≤4096 keys; no performance optimization |
 | Cryptographic security | **Commitment + opening** | Standard Merkle proofs, NOT zero-knowledge |
 | Signed checkpoints | **Ed25519** | Verifiers trust root without trusting store operator |
+| Attested proofs | **Ed25519 pairs** | Bind proofs to signed checkpoint pairs (v0.6.0) |
 | Consistency proofs | **Append-only** | Prove newer root = older root + additions (v0.4.0) |
 | Interval absence | **Continuous** | Prove fact absent throughout epoch range (v0.5.0) |
 | Privacy | **Limited** | Proves absence without revealing set contents, but proof size reveals nothing extra |
@@ -278,6 +327,10 @@ absence verify-attestation attestation.json --pubkey abc123...
 
 10. **Interval absence proof** (v0.5.0): `IntervalAbsenceProof` proves a fact was continuously absent across an epoch range `[from, to]`. It combines: (1) an absence proof at `from_epoch`, (2) a consistency proof from `from_epoch` to `to_epoch`, and (3) verification that the fact ID is not among the added facts. If all three hold, the fact was absent at the start and never added, so it remained absent throughout.
 
+11. **Attested consistency** (v0.6.0): `AttestedConsistency` binds a `ConsistencyProof` to signed checkpoints at both epochs. Verifiers need only the signer's public key to verify: (a) both checkpoints were signed by the trusted key, and (b) the consistency proof is valid. This is the signed equivalent of `prove-consistency`.
+
+12. **Attested interval** (v0.6.0): `AttestedInterval` binds an `IntervalAbsenceProof` to signed checkpoints at both epochs. Like `AttestedConsistency`, verifiers need only the signer's public key to verify both signatures and the continuous absence proof. This is the signed equivalent of `prove-interval`.
+
 ## Project Structure
 
 ```
@@ -294,8 +347,9 @@ crates/
       bundle.rs     # WitnessBundle (v0.3.0)
       consistency.rs # ConsistencyProof for append-only verification (v0.4.0)
       interval.rs   # IntervalAbsenceProof for continuous absence (v0.5.0)
+      # signed.rs also contains AttestedConsistency/AttestedInterval (v0.6.0)
   absence-cli/      # CLI binary
-examples/           # Usage examples (basic, epoch_batch, signed_checkpoint, consistency, interval_absence)
+examples/           # Usage examples (basic, epoch_batch, signed_checkpoint, consistency, interval_absence, attested_proofs)
 ```
 
 ## Related Work

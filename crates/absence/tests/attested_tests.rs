@@ -1,8 +1,6 @@
 //! Integration tests for attested proofs (v0.6.0)
 
-use absence::{
-    AbsenceStore, AttestedConsistency, AttestedInterval, FactId, SignerKey, VerifierKey,
-};
+use absence::{AbsenceStore, AttestedConsistency, AttestedInterval, FactId, SignerKey};
 use serde_json::json;
 
 fn fid(v: serde_json::Value) -> FactId {

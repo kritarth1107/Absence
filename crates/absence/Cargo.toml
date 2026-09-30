@@ -37,3 +37,7 @@ path = "../../examples/consistency.rs"
 [[example]]
 name = "interval_absence"
 path = "../../examples/interval_absence.rs"
+
+[[example]]
+name = "attested_proofs"
+path = "../../examples/attested_proofs.rs"

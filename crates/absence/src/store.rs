@@ -577,6 +577,142 @@ impl AbsenceStore {
     ) -> Result<(), IntervalError> {
         proof.verify_checkpoints(from_checkpoint, to_checkpoint)
     }
+
+    // ============= ATTESTED PROOFS (v0.6.0) =============
+
+    /// Create an attested consistency proof between two epochs.
+    ///
+    /// This generates a [`ConsistencyProof`] showing append-only advancement
+    /// from `from_epoch` to `to_epoch`, then signs both checkpoints with the
+    /// provided signer key, producing an [`AttestedConsistency`].
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use absence::{AbsenceStore, SignerKey};
+    /// use serde_json::json;
+    ///
+    /// let mut store = AbsenceStore::new();
+    /// store.record_json(&json!({"day": 1})).unwrap();
+    /// let signer = SignerKey::generate();
+    /// let _cp0 = store.checkpoint_signed(&signer);
+    ///
+    /// store.record_json(&json!({"day": 2})).unwrap();
+    /// let _cp1 = store.checkpoint_signed(&signer);
+    ///
+    /// let attested = store.attest_consistency(0, 1, &signer).unwrap();
+    /// assert!(attested.verify(&signer.verifier()).is_ok());
+    /// ```
+    pub fn attest_consistency(
+        &self,
+        from_epoch: EpochId,
+        to_epoch: EpochId,
+        signer: &SignerKey,
+    ) -> Result<crate::AttestedConsistency, StoreError> {
+        let from_cp = self
+            .checkpoint_at(from_epoch)
+            .ok_or(StoreError::UnknownEpoch(from_epoch))?;
+        let to_cp = self
+            .checkpoint_at(to_epoch)
+            .ok_or(StoreError::UnknownEpoch(to_epoch))?;
+
+        if from_cp.epoch > to_cp.epoch {
+            return Err(StoreError::IntervalError(
+                IntervalError::InvalidEpochRange {
+                    from: from_cp.epoch,
+                    to: to_cp.epoch,
+                },
+            ));
+        }
+
+        if self.fact_history.is_empty() && !self.tree.is_empty() {
+            return Err(StoreError::NoFactHistory);
+        }
+
+        let from_count = from_cp.fact_count as usize;
+        let to_count = to_cp.fact_count as usize;
+
+        if to_count > self.fact_history.len() {
+            return Err(StoreError::NoFactHistory);
+        }
+
+        let prefix_facts = &self.fact_history[..from_count];
+        let added_facts = &self.fact_history[from_count..to_count];
+
+        let mut tree_at_from = SparseMerkleTree::new();
+        for f in prefix_facts {
+            tree_at_from.insert(f);
+        }
+
+        if tree_at_from.root() != &from_cp.root {
+            return Err(StoreError::Consistency(ConsistencyError::OldRootMismatch));
+        }
+
+        let added_vec: Vec<FactId> = added_facts.to_vec();
+        let consistency = ConsistencyProof::generate(&tree_at_from, &added_vec)?;
+
+        Ok(crate::AttestedConsistency::attest(
+            from_cp,
+            to_cp,
+            consistency,
+            signer,
+        ))
+    }
+
+    /// Create an attested interval absence proof.
+    ///
+    /// This generates an [`IntervalAbsenceProof`] showing the fact was
+    /// continuously absent from `from_epoch` to `to_epoch`, then signs both
+    /// checkpoints with the provided signer key, producing an [`AttestedInterval`].
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use absence::{AbsenceStore, SignerKey, FactId};
+    /// use serde_json::json;
+    ///
+    /// let mut store = AbsenceStore::new();
+    /// store.record_json(&json!({"day": 1})).unwrap();
+    /// let signer = SignerKey::generate();
+    /// let _cp0 = store.checkpoint_signed(&signer);
+    ///
+    /// store.record_json(&json!({"day": 2})).unwrap();
+    /// let _cp1 = store.checkpoint_signed(&signer);
+    ///
+    /// let sensitive = FactId::from_json_value(&json!({"secret": "password"}));
+    /// let attested = store.attest_interval_absent(&sensitive, 0, 1, &signer).unwrap();
+    /// assert!(attested.verify(&signer.verifier()).is_ok());
+    /// ```
+    pub fn attest_interval_absent(
+        &self,
+        fact_id: &FactId,
+        from_epoch: EpochId,
+        to_epoch: EpochId,
+        signer: &SignerKey,
+    ) -> Result<crate::AttestedInterval, StoreError> {
+        let interval_proof = self.prove_absent_interval(fact_id, from_epoch, to_epoch)?;
+        let from_cp = self.checkpoint_at(from_epoch).unwrap();
+        let to_cp = self.checkpoint_at(to_epoch).unwrap();
+
+        Ok(crate::AttestedInterval::attest(
+            from_cp,
+            to_cp,
+            interval_proof,
+            signer,
+        ))
+    }
+
+    /// Create an attested interval absence proof from a JSON value.
+    pub fn attest_interval_absent_json(
+        &self,
+        value: &serde_json::Value,
+        from_epoch: EpochId,
+        to_epoch: EpochId,
+        signer: &SignerKey,
+    ) -> Result<crate::AttestedInterval, StoreError> {
+        let fact_id = FactId::from_json_value(value);
+        self.attest_interval_absent(&fact_id, from_epoch, to_epoch, signer)
+    }
 }
 
 #[cfg(test)]

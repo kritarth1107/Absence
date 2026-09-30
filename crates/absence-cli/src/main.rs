@@ -15,8 +15,9 @@
 //! - attest-absent / verify-attestation: RootAttestation for verified proofs
 
 use absence::{
-    AbsenceStore, Checkpoint, CompactProof, ConsistencyProof, FactId, IntervalAbsenceProof,
-    MembershipProof, NonMembershipProof, RootAttestation, SignedCheckpoint, SignerKey, VerifierKey,
+    AbsenceStore, AttestedConsistency, AttestedInterval, Checkpoint, CompactProof,
+    ConsistencyProof, FactId, IntervalAbsenceProof, MembershipProof, NonMembershipProof,
+    RootAttestation, SignedCheckpoint, SignerKey, VerifierKey,
 };
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
@@ -312,6 +313,76 @@ enum Commands {
         #[arg(short, long)]
         store: Option<PathBuf>,
     },
+
+    // ============= ATTESTED PROOFS (v0.6.0) =============
+    /// Create an attested consistency proof between two epochs
+    AttestConsistency {
+        /// Path to the store file
+        #[arg(short, long, default_value = "absence.store")]
+        store: PathBuf,
+
+        /// Path to the signing key file (hex)
+        #[arg(short, long, default_value = "absence.key")]
+        key: PathBuf,
+
+        /// Starting epoch (inclusive)
+        #[arg(long)]
+        from: u64,
+
+        /// Ending epoch (inclusive)
+        #[arg(long)]
+        to: u64,
+
+        /// Output file for the attested proof JSON (stdout if not specified)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+
+    /// Verify an attested consistency proof
+    VerifyAttestedConsistency {
+        /// Path to the attested proof JSON file
+        proof: PathBuf,
+
+        /// Public key (hex) to verify against
+        #[arg(short, long)]
+        pubkey: String,
+    },
+
+    /// Create an attested interval absence proof
+    AttestInterval {
+        /// Path to the store file
+        #[arg(short, long, default_value = "absence.store")]
+        store: PathBuf,
+
+        /// Path to the signing key file (hex)
+        #[arg(short, long, default_value = "absence.key")]
+        key: PathBuf,
+
+        /// Starting epoch (inclusive)
+        #[arg(long)]
+        from: u64,
+
+        /// Ending epoch (inclusive)
+        #[arg(long)]
+        to: u64,
+
+        /// JSON value to prove absent throughout the interval
+        json: String,
+
+        /// Output file for the attested proof JSON (stdout if not specified)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+
+    /// Verify an attested interval absence proof
+    VerifyAttestedInterval {
+        /// Path to the attested proof JSON file
+        proof: PathBuf,
+
+        /// Public key (hex) to verify against
+        #[arg(short, long)]
+        pubkey: String,
+    },
 }
 
 /// Serializable store format (facts + checkpoint history)
@@ -438,6 +509,27 @@ fn main() {
             new_root,
             store,
         } => cmd_verify_interval(&proof, old_root, new_root, store),
+        Commands::AttestConsistency {
+            store,
+            key,
+            from,
+            to,
+            output,
+        } => cmd_attest_consistency(&store, &key, from, to, output),
+        Commands::VerifyAttestedConsistency { proof, pubkey } => {
+            cmd_verify_attested_consistency(&proof, &pubkey)
+        }
+        Commands::AttestInterval {
+            store,
+            key,
+            from,
+            to,
+            json,
+            output,
+        } => cmd_attest_interval(&store, &key, from, to, &json, output),
+        Commands::VerifyAttestedInterval { proof, pubkey } => {
+            cmd_verify_attested_interval(&proof, &pubkey)
+        }
     }
 }
 
@@ -1269,6 +1361,148 @@ fn cmd_verify_interval(
         }
         Err(e) => {
             eprintln!("✗ INVALID: {}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
+// ============= ATTESTED PROOFS (v0.6.0) =============
+
+fn cmd_attest_consistency(
+    store_path: &PathBuf,
+    key_path: &PathBuf,
+    from: u64,
+    to: u64,
+    output: Option<PathBuf>,
+) {
+    let (store, _) = load_store(store_path);
+    let signer = load_signer(key_path);
+
+    let attested = match store.attest_consistency(from, to, &signer) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    let json_out = serde_json::to_string_pretty(&attested).expect("serialize proof");
+
+    match output {
+        Some(path) => {
+            fs::write(&path, &json_out).expect("Failed to write attested proof");
+            println!("Attested consistency proof written to {}", path.display());
+            println!("Epochs: {} -> {} (+{} facts)", from, to, attested.facts_added());
+            println!("Old root: {}", attested.old_checkpoint().root_hex());
+            println!("New root: {}", attested.new_checkpoint().root_hex());
+            println!("Public key: {}", attested.old_signed.signer_public_key);
+        }
+        None => println!("{}", json_out),
+    }
+}
+
+fn cmd_verify_attested_consistency(proof_path: &PathBuf, pubkey_hex: &str) {
+    let content = fs::read_to_string(proof_path).unwrap_or_else(|e| fail(e));
+    let attested: AttestedConsistency =
+        serde_json::from_str(&content).unwrap_or_else(|e| fail(e));
+
+    let verifier = VerifierKey::from_hex(pubkey_hex).expect("Invalid public key");
+
+    match attested.verify(&verifier) {
+        Ok(()) => {
+            println!("✓ Attested consistency proof VALID");
+            println!(
+                "  Epochs: {} -> {} (+{} facts)",
+                attested.old_checkpoint().epoch,
+                attested.new_checkpoint().epoch,
+                attested.facts_added()
+            );
+            println!("  Old root: {}", attested.old_checkpoint().root_hex());
+            println!("  New root: {}", attested.new_checkpoint().root_hex());
+            println!("  Signer: {}", attested.old_signed.signer_public_key);
+        }
+        Err(e) => {
+            eprintln!("✗ Attested consistency proof INVALID: {}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
+fn cmd_attest_interval(
+    store_path: &PathBuf,
+    key_path: &PathBuf,
+    from: u64,
+    to: u64,
+    json: &str,
+    output: Option<PathBuf>,
+) {
+    let (store, _) = load_store(store_path);
+    let signer = load_signer(key_path);
+
+    let value: serde_json::Value = match serde_json::from_str(json) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("Error parsing JSON: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    let fact_id = FactId::from_json_value(&value);
+
+    let attested = match store.attest_interval_absent(&fact_id, from, to, &signer) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    let json_out = serde_json::to_string_pretty(&attested).expect("serialize proof");
+
+    match output {
+        Some(path) => {
+            fs::write(&path, &json_out).expect("Failed to write attested proof");
+            println!("Attested interval proof written to {}", path.display());
+            println!("Fact ID: {}", fact_id.to_hex());
+            println!("Epochs: {} -> {}", from, to);
+            println!(
+                "Facts added during interval: {}",
+                attested.facts_added_count()
+            );
+            println!("From root: {}", attested.from_checkpoint().root_hex());
+            println!("To root: {}", attested.to_checkpoint().root_hex());
+            println!("Public key: {}", attested.from_signed.signer_public_key);
+        }
+        None => println!("{}", json_out),
+    }
+}
+
+fn cmd_verify_attested_interval(proof_path: &PathBuf, pubkey_hex: &str) {
+    let content = fs::read_to_string(proof_path).unwrap_or_else(|e| fail(e));
+    let attested: AttestedInterval = serde_json::from_str(&content).unwrap_or_else(|e| fail(e));
+
+    let verifier = VerifierKey::from_hex(pubkey_hex).expect("Invalid public key");
+
+    match attested.verify(&verifier) {
+        Ok(()) => {
+            let fact_id = attested.fact_id();
+            println!("✓ Attested interval proof VALID");
+            println!("  Fact {} was continuously absent", fact_id.to_hex());
+            println!(
+                "  Epochs: {} -> {}",
+                attested.from_checkpoint().epoch,
+                attested.to_checkpoint().epoch
+            );
+            println!(
+                "  Facts added during interval: {}",
+                attested.facts_added_count()
+            );
+            println!("  From root: {}", attested.from_checkpoint().root_hex());
+            println!("  To root: {}", attested.to_checkpoint().root_hex());
+            println!("  Signer: {}", attested.from_signed.signer_public_key);
+        }
+        Err(e) => {
+            eprintln!("✗ Attested interval proof INVALID: {}", e);
             std::process::exit(1);
         }
     }
